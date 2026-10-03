@@ -50,7 +50,7 @@
 
 ## 文档维护
 
-Markdown 是 GitHub 阅读与后续维护的入口。已删除重复的 HTML 文档，前端与静态 Demo 仅保留运行必需的 `index.html`；页面中的需求文档入口指向 GitHub 上对应的 Markdown。原有 TXT 保留为转换前的参考，不与 Markdown 自动同步。
+需求、设计与开发记录统一使用 Markdown 维护，已删除重复的 HTML/TXT 文档。前端与静态 Demo 保留运行必需的 `index.html`，页面中的需求文档入口指向 GitHub 上对应的 Markdown。项目根目录的 `requirements.txt`、`requirements-dev.txt` 和 `requirements.lock.txt` 是 Python 依赖清单，继续保留。
 
 - 新增设计使用 `.md`，并在本目录页增加入口。
 - 文档和源码链接使用相对路径；稳定章节跳转保留已有显式锚点。
