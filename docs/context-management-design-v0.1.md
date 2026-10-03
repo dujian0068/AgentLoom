@@ -51,9 +51,9 @@ ContextManager 消费这些模块返回的类型化结果和状态快照。它�
 
 ## 2. 模块架构
 
-[![上下文管理目标模块：记录与来源、装配、Token预算、压缩、激活资源、主子作用域，以及模型网关、工具与Hooks边界](diagrams/context-management.png)](diagrams/context-management.svg)
+[![上下文管理目标模块：记录与来源、装配、Token预算、压缩、激活资源、主子作用域，以及模型网关、工具与Hooks边界](diagrams/context-management.svg)](diagrams/context-management.svg)
 
-图 1 · ContextManager 的目标架构。逻辑模块可先实现在同一 Python 包中；无需为每个模块部署服务。[可缩放 SVG](diagrams/context-management.svg) · [PNG](diagrams/context-management.png)
+图 1 · ContextManager 的目标架构。逻辑模块可先实现在同一 Python 包中；无需为每个模块部署服务。[可缩放 SVG](diagrams/context-management.svg)
 
 | 模块               | 职责                                                                                         | 主要输出                                                     |
 | ------------------ | -------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |

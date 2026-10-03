@@ -28,9 +28,9 @@ AGENTLOOM / ARCHITECTURE
 
 <a id="module-map"></a>
 
-[![AgentLoom 以内核为中心的抽象模块架构：Runtime 包含 HookManager，管理控制面位于侧边，运行服务负责承载实例](diagrams/abstract-module-architecture.png)](diagrams/abstract-module-architecture.svg)
+[![AgentLoom 以内核为中心的抽象模块架构：Runtime 包含 HookManager，管理控制面位于侧边，运行服务负责承载实例](diagrams/abstract-module-architecture.svg)](diagrams/abstract-module-architecture.svg)
 
-图 1 · 以 Agent Runtime 为核心的目标模块架构。2026-10-02 补充挂点契约、扩展注册、处理管道、执行器，以及扩展发布与隔离 Worker；模型和工具边界共用 HookManager。完整 Hooks 尚待实现，独立模块状态见下文。[可缩放 SVG](diagrams/abstract-module-architecture.svg) · [PNG 图片](diagrams/abstract-module-architecture.png)
+图 1 · 以 Agent Runtime 为核心的目标模块架构。2026-10-02 补充挂点契约、扩展注册、处理管道、执行器，以及扩展发布与隔离 Worker；模型和工具边界共用 HookManager。完整 Hooks 尚待实现，独立模块状态见下文。[可缩放 SVG](diagrams/abstract-module-architecture.svg)
 
 ### 配置管理
 
@@ -130,9 +130,9 @@ AGENTLOOM / ARCHITECTURE
 
 > 模型和工具的出入参、用户扩展 SDK、挂点 Schema、执行顺序和恢复规则已进一步细化，见 [统一 Hooks 与用户扩展设计 v0.1](hooks-design-v0.1.md)。下文为总体职责；详细设计将 Patch 细分为 PatchInput / PatchOutput，并采用每阶段稳定排序的管道。
 
-[![Agent Runtime 核心模块、统一 HookManager 及挂点契约、扩展注册、有序管道、隔离执行器](diagrams/agent-runtime-hooks.png)](diagrams/agent-runtime-hooks.svg)
+[![Agent Runtime 核心模块、统一 HookManager 及挂点契约、扩展注册、有序管道、隔离执行器](diagrams/agent-runtime-hooks.svg)](diagrams/agent-runtime-hooks.svg)
 
-Runtime 局部图：注册表提供契约与绑定，HookManager 经 Pipeline 和 Executor 执行扩展；模型与工具共享机制，真实结果与加工输出独立保存。完整 Hooks 尚待实现。[查看 PNG](diagrams/agent-runtime-hooks.png)
+Runtime 局部图：注册表提供契约与绑定，HookManager 经 Pipeline 和 Executor 执行扩展；模型与工具共享机制，真实结果与加工输出独立保存。完整 Hooks 尚待实现。[可缩放 SVG](diagrams/agent-runtime-hooks.svg)
 
 Hooks 直接参与执行流程，调用方需要等待 HookResult，再决定继续、应用修改或阻止当前阶段。HookManager 归属 Runtime；Loop、模型调用包装器、上下文管理器、工具分发器和子任务管理器在各自边界调用它。管理端后续可以管理 Hook 配置，但 Hook 执行机制属于运行内核。
 

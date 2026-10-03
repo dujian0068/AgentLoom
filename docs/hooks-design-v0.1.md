@@ -10,9 +10,9 @@
 
 ## 1. 一个 Hooks 系统，在各自执行边界调用
 
-[![Runtime 内核中的 HookManager、挂点契约、扩展注册、处理管道与执行器](diagrams/agent-runtime-hooks.png)](diagrams/agent-runtime-hooks.svg)
+[![Runtime 内核中的 HookManager、挂点契约、扩展注册、处理管道与执行器](diagrams/agent-runtime-hooks.svg)](diagrams/agent-runtime-hooks.svg)
 
-2026-10-02 更新 · 统一 Hooks 的目标模块与出入参流程，尚待实现。[PNG](diagrams/agent-runtime-hooks.png) · [完整模块架构图](diagrams/abstract-module-architecture.svg)
+2026-10-02 更新 · 统一 Hooks 的目标模块与出入参流程，尚待实现。[可缩放 SVG](diagrams/agent-runtime-hooks.svg) · [完整模块架构图](diagrams/abstract-module-architecture.svg)
 
 ### 模型边界 · ModelGateway
 

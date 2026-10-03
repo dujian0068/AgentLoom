@@ -38,15 +38,15 @@
 
 ## 配图
 
-正文嵌入 PNG 图片，点击图片可查看 SVG。所有链接均使用仓库相对路径。
+架构图统一使用 SVG，正文直接嵌入，点击可打开原图缩放查看。所有链接均使用仓库相对路径。
 
-| 图               | PNG                                                   | SVG                                                     |
-| ---------------- | ----------------------------------------------------- | ------------------------------------------------------- |
-| 总体模块架构     | [查看图片](diagrams/abstract-module-architecture.png) | [查看矢量图](diagrams/abstract-module-architecture.svg) |
-| Runtime 与 Hooks | [查看图片](diagrams/agent-runtime-hooks.png)          | [查看矢量图](diagrams/agent-runtime-hooks.svg)          |
-| 上下文管理       | [查看图片](diagrams/context-management.png)           | [查看矢量图](diagrams/context-management.svg)           |
+| 图               | SVG                                                   |
+| ---------------- | ----------------------------------------------------- |
+| 总体模块架构     | [查看矢量图](diagrams/abstract-module-architecture.svg) |
+| Runtime 与 Hooks | [查看矢量图](diagrams/agent-runtime-hooks.svg)          |
+| 上下文管理       | [查看矢量图](diagrams/context-management.svg)           |
 
-图源：[架构图生成脚本](diagrams/render_architecture.py)、[上下文图生成脚本](diagrams/render_context.py)。生成脚本使用 Python 标准库；更新 SVG 后可使用 `rsvg-convert` 重新生成同名 PNG。
+图源：[架构图生成脚本](diagrams/render_architecture.py)、[上下文图生成脚本](diagrams/render_context.py)。生成脚本使用 Python 标准库，直接生成 SVG。
 
 ## 文档维护
 
@@ -54,5 +54,5 @@
 
 - 新增设计使用 `.md`，并在本目录页增加入口。
 - 文档和源码链接使用相对路径；稳定章节跳转保留已有显式锚点。
-- 修改架构图时同步保存图源、SVG 和 PNG。
+- 修改架构图时同步保存图源和 SVG。
 - 更新实现状态时写明实际完成的内容与验证结果，保留仍待实现或未验证的范围。
