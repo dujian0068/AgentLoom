@@ -1,0 +1,12 @@
+services:
+  agentloom:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    ports:
+      - "127.0.0.1:8766:8766"
+    volumes:
+      - ../data:/app/data
+    environment:
+      AGENT_LOOM_SECURE_COOKIE: "0"
+    restart: unless-stopped

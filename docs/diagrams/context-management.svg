@@ -1,0 +1,139 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1580" height="1770" viewBox="0 0 1580 1770" role="img" aria-labelledby="title description">
+<title id="title">AgentLoom 上下文管理目标架构</title>
+<desc id="description">ContextManager 是 Agent Runtime 的内部模块，包含记录与来源、调用视图装配、Token 预算、分段摘要、激活资源跟踪及主子 Agent 作用域六个逻辑组件。Loop 准备上下文，模型网关运行 Hook 后再次校验预算。工具通过事件总线与 ToolRuntime 执行；实际结果与有效视图分开保存。检查点关联源记录版本、摘要和激活资源引用。压缩仅替换视图，保留执行事实。完整 ContextManager 与 Hooks 是待实现设计。</desc>
+<defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto-start-reverse"><path d="M0 0 L7 4 L0 8" fill="none" stroke="#8396ad" stroke-width="1.5"/></marker></defs>
+<style>text{font-family:"PingFang SC","Hiragino Sans GB","Noto Sans CJK SC",sans-serif}</style><rect width="1580" height="1770" fill="#fff"/>
+<text x="40" y="42" font-size="16" fill="#2862b3" font-weight="650" text-anchor="start">AGENTLOOM  /  CONTEXT MANAGEMENT</text>
+<text x="40" y="91" font-size="38" fill="#20344b" font-weight="650" text-anchor="start">织点 · 上下文管理</text>
+<text x="40" y="126" font-size="20" fill="#576d85" font-weight="400" text-anchor="start">把运行资料组织为每次模型调用需要的上下文，并保留可恢复的执行事实。</text>
+<rect x="1270" y="50" width="270" height="44" rx="22" fill="#fff7e3" stroke="#d9bf8c" stroke-width="1.5"/>
+<text x="1405" y="80" font-size="20" fill="#8a601e" font-weight="600" text-anchor="middle">目标架构 v0.1 · 待实现</text>
+<rect x="40" y="154" width="480" height="104" rx="12" fill="#f0f9f6" stroke="#d7e1ec" stroke-width="1.5"/>
+<text x="56" y="184" font-size="22" fill="#277c78" font-weight="650" text-anchor="start">发布策略与资源目录</text>
+<text x="56" y="212" font-size="18" fill="#277c78" font-weight="400" text-anchor="start">ContextPolicy / Skill Catalog</text>
+<text x="56" y="241" font-size="17" fill="#576d85" font-weight="400" text-anchor="start">固定发布修订 · 按需加载正文与附件</text>
+<rect x="550" y="154" width="480" height="104" rx="12" fill="#f0f9f6" stroke="#d7e1ec" stroke-width="1.5"/>
+<text x="566" y="184" font-size="22" fill="#277c78" font-weight="650" text-anchor="start">用户输入与会话历史</text>
+<text x="566" y="212" font-size="18" fill="#277c78" font-weight="400" text-anchor="start">User Input / History</text>
+<text x="566" y="241" font-size="17" fill="#576d85" font-weight="400" text-anchor="start">当前任务 · 用户补充 · 已授权历史</text>
+<rect x="1060" y="154" width="480" height="104" rx="12" fill="#f0f9f6" stroke="#d7e1ec" stroke-width="1.5"/>
+<text x="1076" y="184" font-size="22" fill="#277c78" font-weight="650" text-anchor="start">工具、知识与子任务结果</text>
+<text x="1076" y="212" font-size="18" fill="#277c78" font-weight="400" text-anchor="start">Tool / RAG / Task Results</text>
+<text x="1076" y="241" font-size="17" fill="#576d85" font-weight="400" text-anchor="start">片段与定位 · 产物引用 · 执行状态</text>
+<path d="M790 267 L790 292" fill="none" stroke="#8396ad" stroke-width="1.6" marker-end="url(#arrow)"/>
+<text x="812" y="287" font-size="17" fill="#576d85" font-weight="400" text-anchor="start">授权输入 · 选择后进入调用视图</text>
+<rect x="30" y="304" width="1520" height="1160" rx="12" fill="#f7f9fe" stroke="#8e9dcc" stroke-width="1.5"/>
+<text x="50" y="343" font-size="26" fill="#405aa2" font-weight="650" text-anchor="start">Agent Runtime · 内核内部的逻辑模块</text>
+<text x="1529" y="342" font-size="18" fill="#536ba4" font-weight="400" text-anchor="end">统一 Loop 调度 · 组件可替换</text>
+<rect x="50" y="371" width="1065" height="564" rx="12" fill="#f0f4ff" stroke="#7792c9" stroke-width="1.5"/>
+<text x="70" y="411" font-size="28" fill="#405aa2" font-weight="650" text-anchor="start">ContextManager · 上下文管理</text>
+<text x="1094" y="410" font-size="18" fill="#6d7fa2" font-weight="400" text-anchor="end">下列六个组件均待实现</text>
+<rect x="70" y="446" width="330" height="110" rx="12" fill="#fff" stroke="#d7e1ec" stroke-width="1.5"/>
+<text x="86" y="476" font-size="22" fill="#405aa2" font-weight="650" text-anchor="start">记录与来源</text>
+<text x="86" y="504" font-size="18" fill="#405aa2" font-weight="400" text-anchor="start">ContextRecordStore</text>
+<text x="86" y="539" font-size="17" fill="#576d85" font-weight="400" text-anchor="start">消息记录 · 原始来源 · 受保护引用</text>
+<rect x="415" y="446" width="330" height="110" rx="12" fill="#fff" stroke="#d7e1ec" stroke-width="1.5"/>
+<text x="431" y="476" font-size="22" fill="#405aa2" font-weight="650" text-anchor="start">调用视图装配</text>
+<text x="431" y="504" font-size="18" fill="#405aa2" font-weight="400" text-anchor="start">ContextAssembler</text>
+<text x="431" y="539" font-size="17" fill="#576d85" font-weight="400" text-anchor="start">按 purpose 选择 · 去重 · 保留边界</text>
+<rect x="760" y="446" width="330" height="110" rx="12" fill="#fff" stroke="#d7e1ec" stroke-width="1.5"/>
+<text x="776" y="476" font-size="22" fill="#405aa2" font-weight="650" text-anchor="start">Token 预算</text>
+<text x="776" y="504" font-size="18" fill="#405aa2" font-weight="400" text-anchor="start">BudgetPolicy</text>
+<text x="776" y="539" font-size="17" fill="#576d85" font-weight="400" text-anchor="start">完整请求计量 · 输出预留 · 硬上限</text>
+<rect x="70" y="575" width="330" height="110" rx="12" fill="#fff" stroke="#d7e1ec" stroke-width="1.5"/>
+<text x="86" y="605" font-size="22" fill="#405aa2" font-weight="650" text-anchor="start">分段摘要</text>
+<text x="86" y="633" font-size="18" fill="#405aa2" font-weight="400" text-anchor="start">CompactionPolicy</text>
+<text x="86" y="668" font-size="17" fill="#576d85" font-weight="400" text-anchor="start">摘要候选 · 校验 · 版本化提交</text>
+<rect x="415" y="575" width="330" height="110" rx="12" fill="#fff" stroke="#d7e1ec" stroke-width="1.5"/>
+<text x="431" y="605" font-size="22" fill="#405aa2" font-weight="650" text-anchor="start">激活资源</text>
+<text x="431" y="633" font-size="18" fill="#405aa2" font-weight="400" text-anchor="start">ResourceTracker</text>
+<text x="431" y="668" font-size="17" fill="#576d85" font-weight="400" text-anchor="start">Skill 修订 · 引用 · 生命周期</text>
+<rect x="760" y="575" width="330" height="110" rx="12" fill="#fff" stroke="#d7e1ec" stroke-width="1.5"/>
+<text x="776" y="605" font-size="22" fill="#405aa2" font-weight="650" text-anchor="start">主子作用域</text>
+<text x="776" y="633" font-size="18" fill="#405aa2" font-weight="400" text-anchor="start">InstanceScope</text>
+<text x="776" y="668" font-size="17" fill="#576d85" font-weight="400" text-anchor="start">独立上下文 · 明确委派与结果出口</text>
+<rect x="70" y="718" width="503" height="92" rx="12" fill="#f0f9f6" stroke="#d7e1ec" stroke-width="1.5"/>
+<text x="86" y="748" font-size="22" fill="#277c78" font-weight="650" text-anchor="start">已发布上下文策略</text>
+<text x="86" y="776" font-size="18" fill="#277c78" font-weight="400" text-anchor="start">ContextPolicy · 固定版本 / 预算 / 选择规则</text>
+<rect x="592" y="718" width="503" height="92" rx="12" fill="#e8edff" stroke="#d7e1ec" stroke-width="1.5"/>
+<text x="608" y="748" font-size="22" fill="#405aa2" font-weight="650" text-anchor="start">只读上下文快照</text>
+<text x="608" y="776" font-size="18" fill="#405aa2" font-weight="400" text-anchor="start">ContextSnapshot · 源记录版本 / 摘要 / 引用</text>
+<text x="70" y="850" font-size="20" fill="#405aa2" font-weight="550" text-anchor="start">prepare 生成调用工作副本；结果按 operation_id 与源版本去重追加。</text>
+<text x="70" y="889" font-size="20" fill="#576d85" font-weight="400" text-anchor="start">压缩替换视图，保留原始执行事实；主、子 Agent 分别管理上下文。</text>
+<rect x="1140" y="371" width="390" height="564" rx="12" fill="#fff7e3" stroke="#c89943" stroke-width="1.5"/>
+<text x="1160" y="411" font-size="27" fill="#8a601e" font-weight="650" text-anchor="start">HookManager</text>
+<text x="1160" y="445" font-size="19" fill="#8a601e" font-weight="400" text-anchor="start">统一扩展接口 · 待实现</text>
+<rect x="1160" y="480" width="350" height="86" rx="12" fill="#fff" stroke="#d7e1ec" stroke-width="1.5"/>
+<text x="1176" y="510" font-size="21" fill="#8a601e" font-weight="650" text-anchor="start">上下文装配与压缩</text>
+<text x="1176" y="538" font-size="18" fill="#8a601e" font-weight="400" text-anchor="start">Context lifecycle</text>
+<rect x="1160" y="584" width="350" height="86" rx="12" fill="#fff" stroke="#d7e1ec" stroke-width="1.5"/>
+<text x="1176" y="614" font-size="21" fill="#8a601e" font-weight="650" text-anchor="start">模型调用前后</text>
+<text x="1176" y="642" font-size="18" fill="#8a601e" font-weight="400" text-anchor="start">model.chat.before / after</text>
+<rect x="1160" y="688" width="350" height="86" rx="12" fill="#fff" stroke="#d7e1ec" stroke-width="1.5"/>
+<text x="1176" y="718" font-size="21" fill="#8a601e" font-weight="650" text-anchor="start">工具执行前后</text>
+<text x="1176" y="746" font-size="18" fill="#8a601e" font-weight="400" text-anchor="start">tool.before / after</text>
+<text x="1160" y="825" font-size="19" fill="#8a601e" font-weight="550" text-anchor="start">类型化补丁 → 校验 → 有效视图</text>
+<text x="1160" y="862" font-size="18" fill="#576d85" font-weight="400" text-anchor="start">扩展不直接修改 frame 或源记录</text>
+<text x="1160" y="899" font-size="18" fill="#576d85" font-weight="400" text-anchor="start">模型与工具边界共用此管理器</text>
+<path d="M1119 655 L1135 655" fill="none" stroke="#8396ad" stroke-width="1.6" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
+<text x="50" y="981" font-size="24" fill="#405aa2" font-weight="650" text-anchor="start">模型调用路径</text>
+<text x="252" y="980" font-size="19" fill="#576d85" font-weight="400" text-anchor="start">根据调用目的准备输入；Hook 修改后重新校验完整请求。</text>
+<rect x="50" y="1004" width="220" height="113" rx="12" fill="#fff" stroke="#d7e1ec" stroke-width="1.5"/>
+<text x="66" y="1034" font-size="22" fill="#405aa2" font-weight="650" text-anchor="start">统一执行循环</text>
+<text x="66" y="1062" font-size="18" fill="#405aa2" font-weight="400" text-anchor="start">Loop</text>
+<text x="66" y="1100" font-size="17" fill="#576d85" font-weight="400" text-anchor="start">action / completion 等</text>
+<rect x="300" y="1004" width="270" height="113" rx="12" fill="#fff" stroke="#d7e1ec" stroke-width="1.5"/>
+<text x="316" y="1034" font-size="22" fill="#405aa2" font-weight="650" text-anchor="start">准备上下文</text>
+<text x="316" y="1062" font-size="18" fill="#405aa2" font-weight="400" text-anchor="start">ContextManager.prepare</text>
+<text x="316" y="1100" font-size="17" fill="#576d85" font-weight="400" text-anchor="start">版本化选择与预算</text>
+<rect x="600" y="1004" width="230" height="113" rx="12" fill="#fff" stroke="#d7e1ec" stroke-width="1.5"/>
+<text x="616" y="1034" font-size="22" fill="#405aa2" font-weight="650" text-anchor="start">调用工作副本</text>
+<text x="616" y="1062" font-size="18" fill="#405aa2" font-weight="400" text-anchor="start">PreparedContext</text>
+<text x="616" y="1100" font-size="17" fill="#576d85" font-weight="400" text-anchor="start">messages / tools / refs</text>
+<rect x="860" y="1004" width="385" height="113" rx="12" fill="#fff" stroke="#d7e1ec" stroke-width="1.5"/>
+<text x="876" y="1034" font-size="22" fill="#405aa2" font-weight="650" text-anchor="start">模型网关</text>
+<text x="876" y="1062" font-size="18" fill="#405aa2" font-weight="400" text-anchor="start">ModelGateway</text>
+<text x="876" y="1100" font-size="17" fill="#576d85" font-weight="400" text-anchor="start">model.before → 必需块 / 预算校验</text>
+<rect x="1275" y="1004" width="255" height="113" rx="12" fill="#fff" stroke="#d7e1ec" stroke-width="1.5"/>
+<text x="1291" y="1034" font-size="22" fill="#405aa2" font-weight="650" text-anchor="start">模型提供方</text>
+<text x="1291" y="1062" font-size="18" fill="#405aa2" font-weight="400" text-anchor="start">Provider Adapter</text>
+<text x="1291" y="1100" font-size="17" fill="#576d85" font-weight="400" text-anchor="start">实际请求与实际响应</text>
+<path d="M275 1059 L293 1059" fill="none" stroke="#8396ad" stroke-width="1.6" marker-end="url(#arrow)"/>
+<path d="M575 1059 L593 1059" fill="none" stroke="#8396ad" stroke-width="1.6" marker-end="url(#arrow)"/>
+<path d="M835 1059 L853 1059" fill="none" stroke="#8396ad" stroke-width="1.6" marker-end="url(#arrow)"/>
+<path d="M1250 1059 L1268 1059" fill="none" stroke="#8396ad" stroke-width="1.6" marker-end="url(#arrow)"/>
+<text x="879" y="1146" font-size="17" fill="#8a601e" font-weight="400" text-anchor="start">共用 HookManager；逻辑调用记录最终输入与有效输出</text>
+<text x="50" y="1190" font-size="24" fill="#926528" font-weight="650" text-anchor="start">工具结果回流</text>
+<text x="252" y="1189" font-size="19" fill="#576d85" font-weight="400" text-anchor="start">Loop 发出请求，能力执行层完成工具调用，再提交上下文记录。</text>
+<rect x="50" y="1213" width="290" height="113" rx="12" fill="#fffdf7" stroke="#d7e1ec" stroke-width="1.5"/>
+<text x="66" y="1243" font-size="22" fill="#926528" font-weight="650" text-anchor="start">请求总线</text>
+<text x="66" y="1271" font-size="18" fill="#926528" font-weight="400" text-anchor="start">EventBus</text>
+<text x="66" y="1309" font-size="17" fill="#576d85" font-weight="400" text-anchor="start">发送请求 · 等待结果</text>
+<rect x="370" y="1213" width="330" height="113" rx="12" fill="#fffdf7" stroke="#d7e1ec" stroke-width="1.5"/>
+<text x="386" y="1243" font-size="22" fill="#926528" font-weight="650" text-anchor="start">工具执行层</text>
+<text x="386" y="1271" font-size="18" fill="#926528" font-weight="400" text-anchor="start">ToolRuntime → Handler</text>
+<text x="386" y="1309" font-size="17" fill="#576d85" font-weight="400" text-anchor="start">MCP / 文件 / RAG / 子任务</text>
+<rect x="730" y="1213" width="400" height="113" rx="12" fill="#fffdf7" stroke="#d7e1ec" stroke-width="1.5"/>
+<text x="746" y="1243" font-size="22" fill="#926528" font-weight="650" text-anchor="start">实际结果与有效视图</text>
+<text x="746" y="1271" font-size="18" fill="#926528" font-weight="400" text-anchor="start">ActualResult / EffectiveView</text>
+<text x="746" y="1309" font-size="17" fill="#576d85" font-weight="400" text-anchor="start">分别保存 · 保留状态与来源</text>
+<rect x="1160" y="1213" width="370" height="113" rx="12" fill="#fffdf7" stroke="#d7e1ec" stroke-width="1.5"/>
+<text x="1176" y="1243" font-size="22" fill="#926528" font-weight="650" text-anchor="start">统一提交</text>
+<text x="1176" y="1271" font-size="18" fill="#926528" font-weight="400" text-anchor="start">ContextManager · append outcome</text>
+<text x="1176" y="1309" font-size="17" fill="#576d85" font-weight="400" text-anchor="start">去重提交 · 校验版本与消息边界</text>
+<path d="M345 1268 L363 1268" fill="none" stroke="#8396ad" stroke-width="1.6" marker-end="url(#arrow)"/>
+<path d="M705 1268 L723 1268" fill="none" stroke="#8396ad" stroke-width="1.6" marker-end="url(#arrow)"/>
+<path d="M1135 1268 L1153 1268" fill="none" stroke="#8396ad" stroke-width="1.6" marker-end="url(#arrow)"/>
+<text x="386" y="1356" font-size="17" fill="#8a601e" font-weight="400" text-anchor="start">共用 HookManager；执行完成后仍须保留真实执行状态</text>
+<text x="50" y="1405" font-size="21" fill="#405aa2" font-weight="650" text-anchor="start">职责边界</text>
+<text x="185" y="1405" font-size="20" fill="#576d85" font-weight="400" text-anchor="start">ContextManager 装配资料；工具执行、RAG 检索、长期 Memory 写入由各自能力模块负责。</text>
+<rect x="40" y="1490" width="1500" height="108" rx="12" fill="#f0f9f6" stroke="#8bbcb1" stroke-width="1.5"/>
+<text x="60" y="1528" font-size="25" fill="#277c78" font-weight="650" text-anchor="start">检查点与恢复</text>
+<text x="287" y="1528" font-size="21" fill="#277c78" font-weight="400" text-anchor="start">依赖版本集合  /  已校验摘要  /  激活资源引用  /  提交阶段  /  Hook 进度</text>
+<text x="60" y="1572" font-size="20" fill="#576d85" font-weight="400" text-anchor="start">压缩失败保留旧视图；恢复后复用已保存的实际结果，不因上下文或后置 Hook 失败重放外部操作。</text>
+<rect x="40" y="1624" width="1500" height="96" rx="12" fill="#fff" stroke="#bcc9dc" stroke-width="1.5" stroke-dasharray="7 5"/>
+<text x="60" y="1661" font-size="22" fill="#526982" font-weight="650" text-anchor="start">实现状态</text>
+<text x="200" y="1661" font-size="20" fill="#576d85" font-weight="400" text-anchor="start">当前已有 frame.messages 与 context.py 字符阈值压缩；完整 ContextManager 与 Hooks 尚待实现。</text>
+<text x="60" y="1698" font-size="19" fill="#576d85" font-weight="400" text-anchor="start">图中六个组件是 Runtime 内部的职责划分，不要求拆成六个进程或独立服务。</text>
+<text x="40" y="1751" font-size="17" fill="#77889c" font-weight="400" text-anchor="start">Context Management v0.1 · AgentLoom · 与独立上下文管理设计文档配套</text>
+</svg>

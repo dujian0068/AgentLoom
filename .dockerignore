@@ -1,0 +1,13 @@
+.git
+.venv
+**/node_modules
+**/dist
+apps/web-demo
+data
+work
+tests
+.DS_Store
+
+.env
+.env.*
+!.env.example

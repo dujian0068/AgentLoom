@@ -1,0 +1,177 @@
+"""Runs service functions."""
+
+import asyncio
+import json
+import sqlite3
+import threading
+import time
+
+import psycopg
+from agentloom_runtime.runtime import create_engine
+from fastapi import HTTPException
+from psycopg_pool import PoolTimeout
+
+from agentloom import store as db
+from agentloom.knowledge import search
+from agentloom.security import decrypt, encrypt
+from agentloom.state import PENDING_FINALIZATIONS, TASKS
+
+_CONNECTION_ERRORS = (psycopg.OperationalError, psycopg.InterfaceError, PoolTimeout)
+_FINALIZATIONS_LOCK = threading.RLock()
+DATABASE_FAILURE_MESSAGE = "数据库访问异常，任务已停止；请检查数据库连接后恢复任务"
+
+
+def finish_run(rid, status, kind, payload, output="", error=None):
+    """Save a terminal result, retaining it for repair if the connection is lost."""
+    pending = {"status": status, "kind": kind, "payload": payload, "output": output, "error": error}
+    with _FINALIZATIONS_LOCK:
+        try:
+            db.finalize(rid, **pending)
+        except _CONNECTION_ERRORS:
+            PENDING_FINALIZATIONS[rid] = pending
+            return False
+        PENDING_FINALIZATIONS.pop(rid, None)
+        return True
+
+
+def flush_finalizations(rid=None):
+    """Retry idempotent terminal writes, optionally for a run about to resume."""
+    completed = 0
+    # Hold the lock through each write: a resume flush must not pass an older
+    # background retry that could finalize the newly resumed execution.
+    with _FINALIZATIONS_LOCK:
+        if rid is None:
+            pending_items = list(PENDING_FINALIZATIONS.items())
+        elif rid in PENDING_FINALIZATIONS:
+            pending_items = [(rid, PENDING_FINALIZATIONS[rid])]
+        else:
+            pending_items = []
+        for run_id, pending in pending_items:
+            try:
+                db.finalize(run_id, **pending)
+            except _CONNECTION_ERRORS:
+                continue
+            PENDING_FINALIZATIONS.pop(run_id, None)
+            completed += 1
+    return completed
+
+
+async def repair_finalizations():
+    """Repair disconnected terminal writes without blocking the event loop."""
+    while True:
+        await asyncio.sleep(3)
+        worker = asyncio.create_task(asyncio.to_thread(flush_finalizations))
+        try:
+            await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            # Shutdown waits for the borrowed connection before closing the pool.
+            await worker
+            raise
+
+
+async def execute_run(rid, snap, space, history, checkpoint=None, instruction=""):
+    secrets_in_use = []
+    engine = None
+
+    def redact(value):
+        text = json.dumps(value, ensure_ascii=False)
+        for secret in secrets_in_use:
+            if secret:
+                text = text.replace(secret, "[REDACTED]")
+        return json.loads(text)
+
+    def emit(kind, payload):
+        db.event(rid, kind, redact(payload))
+
+    try:
+        row = db.query("SELECT input,status FROM runs WHERE id=?", (rid,), True)
+        if not row or row["status"] == "cancelled":
+            return
+        snap["model_obj"]["secret"] = db.resource(snap["model_obj"]["id"], space, "models")[
+            "secret"
+        ]
+        secrets_in_use.append(decrypt(snap["model_obj"]["secret"]))
+        for tool in snap["tools"]:
+            secrets_in_use.append(decrypt(tool.get("secret", "")))
+        workspace = db.DATA / "runs" / rid
+        workspace.mkdir(parents=True, exist_ok=True)
+        db.transition(
+            rid,
+            "running",
+            "run.started",
+            {"version": snap["config"].get("version"), "model": snap["model_obj"]["model_id"]},
+        )
+        async with asyncio.timeout(600):
+
+            def save(state):
+                db.execute(
+                    "INSERT INTO checkpoints(run_id,payload,updated) VALUES(?,?,?) "
+                    "ON CONFLICT(run_id) DO UPDATE SET payload=excluded.payload,updated=excluded.updated",
+                    (rid, encrypt(json.dumps(state, ensure_ascii=False)), time.time()),
+                )
+
+            engine = create_engine(
+                snap,
+                workspace,
+                emit,
+                decrypt,
+                lambda libs, q: search(space, libs, q),
+                checkpoint=checkpoint,
+                save=save,
+            )
+            if checkpoint:
+                engine.resume(instruction)
+            output = redact(await engine.execute(row["input"], history))
+            status = "needs_input" if engine.blocked else "succeeded"
+            finish_run(
+                rid,
+                status,
+                "run.blocked" if engine.blocked else "run.completed",
+                {"output": output, "citations": list(engine.citations.values())},
+                output=output,
+            )
+    except asyncio.CancelledError:
+        finish_run(rid, "cancelled", "run.cancelled", {})
+        raise
+    except Exception as exc:
+        error = redact(
+            DATABASE_FAILURE_MESSAGE
+            if isinstance(exc, (psycopg.Error, sqlite3.Error, PoolTimeout))
+            else "任务超过 10 分钟超时"
+            if isinstance(exc, TimeoutError)
+            else str(exc).strip() or "任务初始化或执行异常，请检查模型、工具及平台密钥文件"
+        )
+        finish_run(rid, "failed", "run.failed", {"error": error}, error=error)
+    finally:
+        try:
+            if engine is not None:
+                await engine.close()
+        finally:
+            TASKS.pop(rid, None)
+
+
+def get_run(rid, user):
+    row = db.query("SELECT * FROM runs WHERE id=? AND space_id=?", (rid, user["space_id"]), True)
+    if not row:
+        raise HTTPException(404, "运行不存在")
+    return row
+
+
+async def events_stream(rid, user, after=0):
+    seq = after
+    while True:
+        rows = db.query("SELECT * FROM events WHERE run_id=? AND seq>? ORDER BY seq", (rid, seq))
+        for row in rows:
+            seq = row["seq"]
+            data = {"seq": seq, "kind": row["kind"], **json.loads(row["payload"])}
+            yield "id: " + str(seq) + "\ndata: " + json.dumps(data, ensure_ascii=False) + "\n\n"
+        status = get_run(rid, user)["status"]
+        if status not in ("queued", "running"):
+            if db.query(
+                "SELECT seq FROM events WHERE run_id=? AND seq>? LIMIT 1", (rid, seq), True
+            ):
+                continue
+            break
+        if not rows:
+            yield ": heartbeat\n\n"
+        await asyncio.sleep(0.3)
