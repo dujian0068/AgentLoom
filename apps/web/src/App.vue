@@ -560,7 +560,10 @@ onUnmounted(() => {
       </nav>
       <div class="sidebarfoot">
         <a href="/api/docs" target="_blank"><Terminal :size="16" />API 文档</a
-        ><a href="/requirements.html" target="_blank"
+        ><a
+          href="https://github.com/dujian0068/AgentLoom/blob/master/docs/requirements-v0.2.md"
+          target="_blank"
+          rel="noopener noreferrer"
           ><BookOpen :size="16" />需求文档</a
         >
         <div class="user">

@@ -1,6 +1,6 @@
 AgentLoom 目录职责与依赖规划 · 2026-10-02
 
-总体方案：以 Agent Runtime 为核心的模块化单体，管理控制面与运行服务分别承担配置和实例生命周期。逻辑分六层，当前仍部署一个 Python 服务；完整架构见 architecture-v0.3.html。
+总体方案：以 Agent Runtime 为核心的模块化单体，管理控制面与运行服务分别承担配置和实例生命周期。逻辑分六层，当前仍部署一个 Python 服务；完整架构见 architecture-v0.3.md。
 以下明确区分现有目录和后续目标，不预先创建大量空模块。
 
 apps/web/
@@ -56,4 +56,4 @@ docs/ / deploy/ / tests/
 本地 data/assets 保存导入包，data/runs 保存工作区与产物，data/encryption.key 保存加密根密钥。
 SQLite 可用于隔离测试和显式离线模式。数据库与本地文件需要对应备份。
 
-Hooks 详细设计：hooks-design-v0.1.html。目标 hooks/ 包内区分 HookPointRegistry、HookRegistry、HookManager、HookPipeline 和 HookExecutor；模型网关与工具分发使用同一套机制。用户 SDK 和隔离 Worker 尚待实现。
+Hooks 详细设计：hooks-design-v0.1.md。目标 hooks/ 包内区分 HookPointRegistry、HookRegistry、HookManager、HookPipeline 和 HookExecutor；模型网关与工具分发使用同一套机制。用户 SDK 和隔离 Worker 尚待实现。

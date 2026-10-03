@@ -50,7 +50,7 @@
 
 ## 文档维护
 
-Markdown 是 GitHub 阅读与后续维护的入口。原有 HTML/TXT 保留为转换前的预览与参考，不与 Markdown 自动同步。
+Markdown 是 GitHub 阅读与后续维护的入口。已删除重复的 HTML 文档，前端与静态 Demo 仅保留运行必需的 `index.html`；页面中的需求文档入口指向 GitHub 上对应的 Markdown。原有 TXT 保留为转换前的参考，不与 Markdown 自动同步。
 
 - 新增设计使用 `.md`，并在本目录页增加入口。
 - 文档和源码链接使用相对路径；稳定章节跳转保留已有显式锚点。
