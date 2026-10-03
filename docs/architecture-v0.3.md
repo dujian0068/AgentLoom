@@ -115,7 +115,7 @@ AGENTLOOM / ARCHITECTURE
 | Loop / Engine     | 区分模型回答和 tool_calls，维护轮次与 pending 调用，将工具结果回填对话，决定下一轮或结束。 | `engine.py`；已经去掉具体工具执行分支。                                                                         |
 | HookManager       | 在明确生命周期节点按顺序调用扩展；管理允许的修改、拦截、超时、异常与恢复语义。             | **目标模块，尚未实现。** 现有 EventBus.subscribe 是观察通知，尚不具备完整可等待、可修改、可拦截的 Hooks 契约。  |
 | ModelGateway      | 统一模型请求与响应、凭据解析、限流和用量记录，对接不同供应商适配器。                       | 目标接口。当前 Engine 仍直接调用 `provider.chat` 并持有 decrypt 回调；provider 已实现协议校验和有限重试。       |
-| ContextManager    | 管理任务目标、对话与工具消息、事实摘要、上下文预算；压缩时保持工具调用/结果成组。          | `context.py` 已有压缩策略；当前按字符预算。                                                                     |
+| ContextManager    | 管理实例内跨 Loop 上下文、会话历史继承、上下文预算与来源；压缩时保持工具调用/结果成组。    | `context.py` 已有字符预算压缩；完整会话历史继承为目标，见[作用域设计](context-management-design-v0.1.md#scope)。 |
 | PlanManager       | 保存和调整计划及步骤状态；Plan 要求先计划再自动执行。                                      | `planning.py` 和 planning handler；ReAct/Plan 共用 Loop。                                                       |
 | CompletionPolicy  | 依据目标、执行证据与未完成计划判断 complete / continue / blocked。                         | `completion.py`；当前同一模型做完成检查，不能替代真实工具验证。                                                 |
 | ChildTaskManager  | 创建、恢复、收集子任务；继承主模型，维护子任务上下文、资源范围与预算。                     | 当前由 delegation handler + Engine.loop 实现；后续抽成明确接口。子 Agent 不配置独立模式，内部可以维护任务步骤。 |
@@ -241,11 +241,19 @@ Handler：使用具体能力
 3. ReleaseService 校验模型、资源范围、工具状态和知识可用性，解析发布所需修订。
 4. 事务保存 AgentVersion；网页和 API 都运行这个版本，修改草稿后须重新发布。
 
+### 会话、执行线程与历史继承（目标）
+
+逻辑执行线程由 `(run_id, instance_id)` 标识，不等同于操作系统线程。一次用户提问创建一个新 Run 和根实例，该请求的多次 Loop 共用此实例的上下文；同会话的下一次新提问创建另一 Run 和根实例。恢复与补充继续原 Run、原实例，不能按新提问创建线程。
+
+新 Run 在首次模型调用前，继承同会话此前全部已提交且当前授权可见的历史：用户提问与回答、各 Loop 的模型消息、工具调用参数和结果、MCP 交互、Skill 加载内容及资源引用、知识与文件资料、错误和状态记录；失败、取消 Run 中已经发生的记录也在范围内。继承不限定为最近 6 个成功 Run 或最终问答。历史可压缩，大内容可按引用读取，但必须保留完整来源与可追溯关系，不能以最终回答摘要替代全部交互历史。旧 pending 调用、取消标记、计数器和其他可变执行状态仅作为历史事实，不恢复到新 Run 执行。
+
+同会话新提问默认串行；存在活动 Run 时沿用当前拒绝策略，本次不新增新提问排队。运行中补充队列仍为目标设计，其输入归属原 Run。历史 Skill 加载不新增工具权限，凭据不进入上下文；子实例内部上下文仍隔离，仅显式导出的结果、证据与引用可进入父实例和会话历史。详细边界见[上下文管理：会话、执行线程与历史继承](context-management-design-v0.1.md#scope)。本节是已确认目标，不代表当前已实现完整历史继承。
+
 ### 一次运行
 
 1. API 认证调用者，把输入、Agent ID 和版本交给 RunService。
-2. RunService 校验空间、版本、会话与配额，创建 Run 和工作区，再组装 Runtime。
-3. Loop 向 ModelGateway 提交 Prompt、消息和当前实例可用的工具定义。
+2. RunService 校验空间、版本、会话活动状态与配额，为新提问创建 Run、根实例和工作区；确定会话历史快照并组装 Runtime，由 ContextManager 按上述目标加载授权历史。
+3. Loop 向 ModelGateway 提交 Prompt、消息和当前实例可用的工具定义；同一请求后续 Loop 继续使用该逻辑执行线程的上下文。
 4. 模型返回 tool_calls，Loop 保存 pending 状态，经总线等待工具结果。
 5. ToolRuntime 校验并调用处理器；处理器访问工作区、Skill、MCP 或 Retriever。
 6. 结果回填上下文并保存检查点，Loop 决定继续行动、修订计划或委派子任务。
@@ -256,7 +264,7 @@ Handler：使用具体能力
 
 主 Agent 通过 delegate_task 发出委派请求。ChildTaskManager 为所选内嵌配置创建实例，传入任务及必要上下文，继承主模型，使用自己的资源范围与工作区；结果回给主 Agent 继续整合。当前子任务顺序执行、最多 8 次委派，不递归创建。
 
-恢复时读取同一发布版本及原检查点，补充用户输入后继续；已完成调用不重放。执行中中断的普通工具结果未知时先核对实际状态，子任务可依据保存的实例 ID 接续。检查点记录执行进度，不提供外部副作用恰好发生一次的保证。
+恢复时读取同一发布版本及原检查点，在原 Run、原实例的上下文中补充用户输入后继续；已完成调用不重放。执行中中断的普通工具结果未知时先核对实际状态，子任务可依据保存的实例 ID 接续。检查点记录执行进度，不提供外部副作用恰好发生一次的保证。
 
 <a id="data"></a>
 
@@ -267,11 +275,13 @@ Handler：使用具体能力
 | Space / Member                       | 团队与成员身份，所有 Agent 和资源的访问范围。                 | Identity / SpaceService                      |
 | Model / Skill / Tool / KnowledgeBase | 空间可复用资源；当前统一保存于 resources.kind + JSON。        | 各资源服务 + ResourceRepository              |
 | AgentDraft / AgentVersion            | 可编辑配置 / 已发布配置与资源修订。                           | AgentService / ReleaseService                |
-| Session                              | 一次持续对话，绑定用户、Agent 和发布版本。                    | RunService / SessionRepository               |
-| Run                                  | 一次用户任务；可包含主实例、子实例、多轮推理与多次工具调用。  | RunService / RunRepository                   |
-| AgentInstance / ToolCall             | 主/子执行上下文和一次能力请求；当前主要在检查点与事件中记录。 | Runtime；以后按查询需要再独立建表。          |
+| Session                              | 持续对话及授权历史边界，绑定用户、Agent 和发布版本；包含多个 Run。 | RunService / SessionRepository               |
+| Run                                  | 一次新提问；创建新根实例，多次 Loop、恢复与补充沿用本 Run。   | RunService / RunRepository                   |
+| AgentInstance / ToolCall             | `(run_id, instance_id)` 标识独立逻辑执行线程；ToolCall 记录调用参数、结果与关联。当前主要在检查点与事件中记录。 | Runtime；以后按查询需要再独立建表。          |
 | Document / Chunk / IndexRevision     | 原文、带行号片段、检索索引修订。                              | KnowledgeService / KnowledgeRepository       |
 | Checkpoint / RunEvent / Artifact     | 可恢复执行状态 / 运行事实 / 生成文件。                        | CheckpointStore / EventStore / ArtifactStore |
+
+**历史继承目标：** 会话历史保存各 Run 已提交的交互来源及顺序、所属实例、内容或不可变引用，供新 Run 按当前授权重建；Checkpoint 用于恢复原 Run 的可变执行状态。两者不能以复制旧检查点代替历史继承，来源记录和摘要的关系详见[作用域设计](context-management-design-v0.1.md#scope)。
 
 **当前存储：** PostgreSQL 保存账号、配置、发布、会话、运行、事件、加密检查点以及知识原文/分块/向量文本；本地文件保存 Skill 和工具包、运行工作区、产物及加密根密钥。PostgreSQL 关键词检索使用 GIN，当前向量相似度由 Python 计算。
 
@@ -335,6 +345,8 @@ API 应用依赖 Runtime 公共入口；Runtime 不反向导入 API。模型、R
 | 3 · 明确资源版本           | Skill 包修订、MCP 注册修订、Wiki 索引修订、统一凭据引用。                                                       | 发布后改资源的影响符合明确规则；旧版本与恢复均可解释、可追踪。                                                                  |
 | 4 · 分离知识流程与前端页面 | 入库/索引与检索拆分；管理台按资源和任务功能拆页。                                                               | 上传不进入 Loop；检索仅访问实例绑定修订；App.vue 回到页面壳职责。                                                               |
 | 5 · 同进程运行可靠性       | 将同步数据库调用收口到异步或线程适配；明确事件落库、背压和恢复策略。                                            | 远程数据库变慢不阻塞所有执行；取消、超时、断线和恢复有可重复验证。                                                              |
+
+会话连续性还需验收：一次请求多次 Loop 的线程标识不变，新提问更换 Run 与根实例，恢复和补充保留原标识；新提问可追溯超过 6 个 Run 的工具、Skill、知识与文件历史及失败/取消记录，压缩后仍可授权回查；旧 pending、取消与计数不进入新 Run 执行，活动 Run 期间的新提问继续被拒绝，子实例未导出的内部记录和凭据不可见。
 
 当前保留单进程部署：进程内 asyncio Task 管理运行，事件总线按 Run 创建，SSH 隧道只是本机开发访问远程 PostgreSQL 的连接方式。不能通过直接增加 Uvicorn worker 数量获得正确的多实例调度。
 

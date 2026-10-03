@@ -2,11 +2,13 @@ AGENTLOOM / RUNTIME DESIGN
 
 # 上下文管理设计
 
-独立设计文档 · v0.1 · 2026-10-03 · 基于当前代码静态核对
+独立设计文档 · v0.1 · 2026-10-03 · 增订会话与执行线程语义；基于当前代码静态核对
 
 **ContextManager 决定每次模型调用看到什么，并保证这些信息在预算内、来源可追溯、主子任务相互隔离、运行中断后可恢复。** 它属于 Agent Runtime，与 Loop、HookManager、计划管理和检查点协作。
 
 > **实现状态：** 当前已有消息组装、按字符触发的历史摘要和实例检查点；尚未实现本文定义的 ContextManager、类型化记录、Token 预算器和版本化上下文视图。下文的接口、配置与模块名均为拟议设计，本次仅形成文档与模块图。
+
+**已确认的会话语义：** 一次新提问创建独立 Run 与主执行线程；该请求的多次 Loop 共用该线程上下文。同一会话的下一次新提问继承此前完整的、已授权的交互历史，包括问答、模型消息、工具调用参数与结果、MCP、Skill 加载内容及资源引用。继承范围不限制为成功任务或最终问答；中断恢复与用户补充继续原 Run/线程。详见[第 8 节](#scope)。
 
 [总体架构](architecture-v0.3.md) · [统一 Hooks 与用户扩展设计](hooks-design-v0.1.md)
 
@@ -17,7 +19,7 @@ AGENTLOOM / RUNTIME DESIGN
 - [预算与超限](#budget)
 - [压缩与事实](#compaction)
 - [Skill / RAG / Memory](#resources)
-- [会话与子任务](#scope)
+- [会话与执行线程](#scope)
 - [Hooks 接入](#hooks)
 - [持久化与恢复](#recovery)
 - [接口与配置](#api)
@@ -58,7 +60,7 @@ ContextManager 消费这些模块返回的类型化结果和状态快照。它�
 | 模块               | 职责                                                                                         | 主要输出                                                     |
 | ------------------ | -------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
 | ContextManager     | 统一入口，协调记录、装配、预算、压缩与版本提交；按实例串行写入。                             | PreparedContext、ContextSnapshot、结构化错误。               |
-| ContextRecordStore | 保存带来源的追加记录、幂等键和内容引用；提供按实例、序号和交互组回读接口。                   | ContextRecord / MessageGroup。数据库及文件实现通过端口注入。 |
+| ContextRecordStore | 保存会话有序记录、实例归属、幂等键和内容引用；提供历史快照与按交互组回读接口。                   | ContextRecord / MessageGroup / SessionHistorySnapshot；存储通过端口注入。 |
 | ContextAssembler   | 依据调用目的、权限、保留规则和状态快照选择上下文块，并生成标准消息。                         | ContextBlock 列表、消息、来源映射与丢弃原因。                |
 | BudgetPolicy       | 对消息、工具定义、协议开销、输出预留统一计费；选择保留、外置或压缩策略。                     | BudgetReport、超限位置与可执行的减量方案。                   |
 | CompactionPolicy   | 选择已完成历史，分段生成摘要、校验覆盖范围，并以新修订提交；摘要模型通过 ModelGateway 调用。 | SummaryRevision、CompactionJob。不得递归启动无限压缩。       |
@@ -76,11 +78,16 @@ HookPointRegistry 与 HookManager 仍由统一 Hooks 模块提供；ContextManag
 ```text
 ContextScope
   space_id / actor_id / session_id / run_id / instance_id
+  execution_thread_key = (run_id, instance_id)
   agent_release / effective_grant_ref
 
+SessionHistorySnapshot
+  snapshot_id / session_id / through_session_sequence
+  source_record_ranges / summary_revision? / dependency_versions
+
 ContextRecord
-  record_id / sequence / scope / event_key
-  kind: user_input | assistant_message | tool_outcome | resource | child_result
+  record_id / session_sequence / instance_sequence / scope / event_key
+  kind: user_input | assistant_message | tool_call | tool_outcome | resource | child_result
   source: resource_id? / revision? / path? / line_range? / operation_id?
   content_ref / effective_view_ref? / content_hash
   authority / visibility / created_at
@@ -93,15 +100,19 @@ ContextBlock
 
 PreparedContext
   prepared_id / scope / purpose / source_watermark / context_revision
+  inherited_history_snapshot_id
   policy_revision / model_profile_revision / tool_catalog_revision
   messages / authorized_tools / block_source_map / protected_block_manifest
   dependency_versions / budget_report
 
 ContextSnapshot
-  revision / source_watermark / summary_revision / active_resource_refs
+  revision / inherited_history_snapshot_id / source_watermark
+  summary_revision / active_resource_refs
   selected_group_ids / state_refs / dependency_versions
   policy_revision / pending_compaction_ref?
 ```
+
+SessionHistorySnapshot 固定新线程启动前已提交的会话历史边界。继承记录保留原 run_id、instance_id、call_id 与来源，只引用一次，不重新追加成新线程产生的消息。session_sequence 用于跨提问排序，instance_sequence 用于单线程内的调用顺序；它们均由宿主分配。
 
 原始结果和 Hook 加工视图通过不同引用关联同一 operation_id。调用状态以实际操作记录为准，视图内容不得覆盖真实状态。ContextRecord 逻辑追加；到期删除、用户删除或访问撤回由存储策略处理，不因“可追溯”无限保留内容。
 
@@ -109,7 +120,7 @@ ContextSnapshot
 
 ### 工具消息的完整性
 
-一条 assistant 消息中的全部 tool_calls，加上对应每个 call_id 的结果，组成一个 MessageGroup。模型输入必须保留完整关联；删除旧历史时整组替换为摘要。尚未完成的调用组先由 Runtime 恢复或核对，不能为了腾空间删掉一半，也不能伪造“工具已成功”的结果。用户补充在组闭合后加入下一次模型输入，保留原输入时间和顺序。
+一条 assistant 消息中的全部 tool_calls，加上对应每个 call_id 的结果，组成一个 MessageGroup。模型输入必须保留完整关联；删除旧历史时整组替换为摘要。当前执行线程尚未完成的调用组先由 Runtime 恢复或核对，不能为了腾空间删掉一半，也不能伪造“工具已成功”的结果。跨 Run 继承的未闭合调用按第 8.2 节投影为历史状态块，不触发原调用的恢复或执行。用户补充在组闭合后加入下一次模型输入，保留原输入时间和顺序。
 
 组内结果体可以使用结构化缩略视图，但要保留调用 ID、真实状态、截取说明和原文回读引用。禁止按任意字符位置截断 JSON 参数或协议字段。
 
@@ -119,7 +130,7 @@ ContextSnapshot
 
 ```text
 Loop 到达安全的模型调用边界
-  → 读取 ContextScope、发布策略、实例状态与源记录水位
+  → 读取 ContextScope、继承历史快照、发布策略、实例状态与源记录水位
   → ContextAssembler 按 purpose 选取候选块
   → context.prepare.before：受约束地增加资料或调整可选块
   → 核验来源、作用域、消息组完整性
@@ -132,6 +143,8 @@ Loop 到达安全的模型调用边界
   → 保存真实响应 → model.chat.after → 幂等追加有效模型消息
   → Loop 判断回答或工具调用，继续下一轮
 ```
+
+新线程先把历史快照覆盖的全部授权交互记录纳入上下文来源，再追加本请求记录。预算足够时按原顺序装配完整交互；超限时才对已完成历史做带来源的压缩或把大结果外置。不能默认退化成“历史问题与最终回答”或固定最近 N 个成功任务。
 
 上下文选择需要可解释：每块记录为何被保留、摘要、外置或移除。相同源水位、策略和资源版本应生成稳定次序；后续优化可以改变选择策略，但必须版本化。
 
@@ -229,20 +242,69 @@ SummaryRevision
 
 ### 7.3 Memory：预留端口，后续单独设计
 
-长期记忆保存跨运行的事实或偏好，需要有写入来源、作用域、冲突解决、过期、删除与撤回规则。ContextManager 只接收授权的 MemoryItem 并计入预算。当前聊天摘要、RAG 结果和检查点都不会自动写成长记忆；这部分不作为本次 ContextManager 首期落地的前置条件。
+长期记忆保存可复用的事实或偏好，需要有写入来源、作用域、冲突解决、过期、删除与撤回规则。同一会话跨提问的完整历史继承由 ContextRecordStore 与 SessionHistorySnapshot 完成，不依赖长期记忆提炼，也不以 Memory 替代原始交互。ContextManager 只接收授权的 MemoryItem 并计入预算。当前聊天摘要、RAG 结果和检查点都不会自动写成长记忆；这部分不作为本次 ContextManager 首期落地的前置条件。
 
 <a id="scope"></a>
 
-## 8. 会话连续性与主子任务隔离
+## 8. 会话、执行线程与历史继承
 
-| 边界               | 目标行为                                                                                                                        |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
-| 空间与访问者       | ContextScope 必须包含空间、会话及当前访问授权。能访问空间 Agent 不等于能读取其他成员的私有会话历史；共享会话需独立、显式授权。  |
-| 同一会话的新 Run   | 继承允许的用户/回答记录与带版本的会话摘要；既往任务状态作为历史，不把旧工具 pending 状态当作新任务。新 Run 从当前用户目标开始。 |
-| 同一 Run 的恢复    | 恢复原运行实例、发布策略和执行阶段；核对当前授权、未确认调用和上下文修订，再继续同一任务。                                      |
-| Agent 发布版本变化 | 首期保持会话绑定发布版本；使用新发布版开启新会话。旧内容若需导入，作为带来源的显式转交，不无声替换系统指令。                    |
-| 子 Agent           | 继承主模型绑定；拥有独立 task、消息、摘要、计划视图、激活清单与引用集合。资源范围由子配置与实际授权共同限定，不自动复制父历史。 |
-| 子任务返回         | 通过 ContextTransfer / TaskResult 显式导出结论、状态、证据、产物和未完成项；检查父实例是否有权读取这些引用。                    |
+### 8.1 一次新提问对应一个主执行线程
+
+本文的线程是由 `(run_id, instance_id)` 标识的逻辑执行上下文，可由异步任务承载。它拥有独立的消息视图、Loop 轮次、当前计划、pending 调用和检查点。
+
+| 对象 | 目标语义 |
+| ---- | -------- |
+| Session | 一段持续会话，承载多次提问及其有序交互记录，绑定用户、Agent 与发布版本。 |
+| Run | 一次新的提问请求及其执行生命周期；新的提问生成新的 run_id。 |
+| 主执行线程 | Run 内的主 AgentInstance；同一个提问中的多次 Loop 始终使用这一线程的上下文。 |
+| Loop / 模型步骤 | 在原线程中准备输入、调用模型、执行工具并追加结果；每次 Loop 不另建线程。 |
+| 恢复与补充 | 针对原任务继续处理，保留原 run_id、instance_id、历史快照和检查点。 |
+| 子执行线程 | 按需创建的子 AgentInstance，按明确的背景和结果出口与主线程通信。 |
+
+例如：
+
+```text
+Session S
+  提问 A → Run A / 主线程 A：Loop 1 → MCP 调用 → Loop 2 → Skill 加载 → 回答 A
+                  ↓ 会话记录：输入、模型消息、完整调用与结果、资源引用
+  提问 B → Run B / 主线程 B：继承 A 的交互历史 + 提问 B → Loop 1 → Loop 2 → 回答 B
+  提问 C → Run C / 主线程 C：继承 A、B 的交互历史 + 提问 C → ...
+
+恢复 B → 继续 Run B / 主线程 B 的检查点，不创建 B2，也不自动混入 C 的历史。
+```
+
+### 8.2 新提问继承此前完整交互
+
+新 Run 启动前，RunService 为当前会话建立不可变 SessionHistorySnapshot，读取截至 through_session_sequence 的全部已提交、当前授权可见记录。继承内容包括：
+
+- 之前的用户提问、澄清、纠正与补充，模型已记录的中间消息和最终回答。
+- 每次工具调用的名称、call_id、参数、真实状态、结果与来源；覆盖文件读写、MCP、知识检索等处理器。
+- Skill 的加载记录、当时加载的正文或附件引用、资源修订与相关结果。
+- 已发生的计划变化、子任务显式导出的结果、知识引用与产物引用。
+- 失败、取消、等待补充和中断任务中已经发生并保存的交互；未知结果保留 unknown 状态，不凭空当成成功。
+
+完整继承描述的是历史来源范围。预算足够时，模型获得完整的历史交互与新问题；超出模型窗口时，沿用可验证的历史摘要并追加尚未覆盖的记录，或外置大结果，保留原文回读入口。摘要覆盖范围必须包含工具、MCP、Skill 等过程信息，不能只保留最终问答。每次模型请求仍要满足第 5 节预算与第 6 节压缩规则。
+
+尚未闭合的历史调用保留在原 Run 的执行状态中；新线程将其作为带来源的历史状态块呈现，明确“执行结果未知”，不直接拼接成缺少结果的工具消息组，也不补造成功结果。已闭合的调用组按协议成组继承。
+
+Session 保存实际发生的记录一次，各线程通过快照引用继承，避免把 A 的消息作为 B 的新消息再次写回会话、到 C 时重复累计。原调用标识按来源线程关联；协议适配器若需要重映射 call_id，必须同时映射调用及其结果并保留来源对照。
+
+### 8.3 继承历史与继续执行的边界
+
+| 边界 | 目标行为 |
+| ---- | -------- |
+| 新 Run 的执行状态 | 新建当前目标、当前计划、Loop 计数与 pending 状态；旧任务计划和调用作为历史证据，不能变成新线程待执行队列。 |
+| 历史中的工具与 Skill | 保留曾经调用和加载的记录；当前可调用能力仍由发布快照及当前授权决定。加载过某 Skill 不代表新线程自动获得额外工具权限，历史指令保留来源级别。 |
+| 历史文件与产物 | 按来源工作区、版本和内容引用回读；新 Run 有独立工作区，旧文件路径不能误当成本次工作区的同名文件。 |
+| 同一会话有活动 Run | 首期沿用串行约束：新提问拒绝启动并提示等待或停止当前任务。若后续支持排队，应在实际启动时确定历史水位。 |
+| 运行中的用户补充 | 目标是定向追加到原 Run，在安全边界加入下一次模型输入；当前仅已实现恢复时补充，实时补充队列尚待实现。 |
+| 恢复旧 Run | 读取原线程检查点及其历史快照，在核对当前授权和未知调用后继续；不重新读取此刻整个 Session 作为新上下文。 |
+| Agent 发布版本变化 | 会话固定发布版本，使用新版本开启新会话。需要迁移历史时显式转交并保留来源。 |
+| 空间与访问者 | 拥有空间 Agent 权限不自动取得其他用户的会话记录；共享历史需显式授权。模型凭据、认证头和无关运维日志不属于交互上下文。 |
+
+### 8.4 主子任务隔离
+
+子 Agent 继承主模型，拥有独立 task、消息、摘要、计划视图、激活清单与引用集合。主线程按任务提供授权背景；子线程内部历史保留在自己的作用域，主会话继承其显式导出的结果与来源，不能无条件展开所有私有子线程记录。
 
 委派背景是父实例主动选择的资料，子任务不能把它当作新的系统权限。返回结果中的正文属于子任务产出，不成为父 Agent 的高优先级指令。共享存储可复用相同内容引用，但可见性和引用集合按 instance 隔离。
 
@@ -253,7 +315,7 @@ TaskResult
   exported_context_refs / source_revision
 ```
 
-同一实例首期采用单写者顺序追加；多个子实例可并行，各自更新自己的修订，父实例按操作 ID 接收结果。用户补充排队进入下一安全边界，禁止两个调用同时覆盖同一份可变 messages。
+同一执行线程采用单写者顺序追加；多个子实例可并行，各自更新修订，父实例按操作 ID 接收结果。用户补充保留接收顺序，在下一安全边界进入上下文，禁止两个调用同时覆盖同一份可变 messages。
 
 <a id="hooks"></a>
 
@@ -281,8 +343,9 @@ TaskResult
 
 | 持久化对象   | 必须记录                                                                                       | 恢复用途                                       |
 | ------------ | ---------------------------------------------------------------------------------------------- | ---------------------------------------------- |
-| 上下文源记录 | scope、递增 sequence、幂等 event_key、来源版本、原始/有效内容引用。                            | 重建消息投影；避免同一模型或工具结果重复追加。 |
-| 上下文快照   | source_watermark、策略修订、摘要修订、已选择组、活跃资源与状态引用，以及 dependency_versions。 | 核对所有依赖后恢复原视图或重新装配。           |
+| 会话继承快照 | session_id、through_session_sequence、来源记录范围、摘要修订与依赖版本。 | 恢复原线程继承的历史边界，避免带入后来提问或重复继承。 |
+| 上下文源记录 | scope、session_sequence / instance_sequence、幂等 event_key、来源版本、原始/有效内容引用。                            | 重建消息投影；避免同一模型或工具结果重复追加。 |
+| 上下文快照   | inherited_history_snapshot_id、source_watermark、策略修订、摘要修订、已选择组、活跃资源与状态引用，以及 dependency_versions。 | 核对所有依赖后恢复原视图或重新装配。           |
 | 压缩操作     | compaction_id、覆盖范围、父摘要、模型 operation_id、Hook 阶段、候选摘要、提交状态。            | 复用已有摘要，识别已请求但结果未知的模型调用。 |
 | 模型调用记录 | prepared_id、最终有效输入引用、工具目录版本、模型配置、响应引用与预算/usage。                  | 解释实际请求；恢复后处理，不重复已完成调用。   |
 
@@ -309,7 +372,7 @@ TaskResult
 以下为概念接口，尚未实现，不是当前可直接导入的 SDK。
 
 ```text
-context.open(scope, published_policy, restored_snapshot=None)
+context.open(scope, published_policy, inherited_history_snapshot, restored_snapshot=None)
 context.append_user(input, event_key, expected_revision)
 context.append_model_result(operation_result, event_key, expected_revision)
 context.append_tool_outcome(outcome, event_key, expected_revision)
@@ -362,7 +425,7 @@ packages/runtime/agentloom_runtime/context/  # 目标；从现有 context.py 渐
 | 能力         | 现有实现                                                                                                                                                                                               | 需要补齐                                                                              |
 | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------- |
 | 初始组装     | [engine.py](../packages/runtime/agentloom_runtime/engine.py) 的 prompt / loop：Agent Prompt + Loop 规则 + Skill/子 Agent 目录 + 历史 + 当前任务。                                                      | 独立 Assembler、类型化来源、分区与调用目的策略。                                      |
-| 会话历史     | [routes/runs.py](../apps/api/agentloom/routes/runs.py) 新 Run 读取同会话最近 6 个成功 Run 的用户输入与最终输出。                                                                                       | 版本化会话摘要与明确继承策略；当前不会自动继承旧工具对话或摘要。                      |
+| 会话历史     | [routes/runs.py](../apps/api/agentloom/routes/runs.py) 新 Run 读取同会话最近 6 个成功 Run 的用户输入与最终输出。                                                                                       | 新提问独立线程、完整历史快照继承；目前缺少旧工具/MCP/Skill 过程，恢复补充原文也未完整进入后续新 Run 历史。                      |
 | 压缩与预算   | [context.py](../packages/runtime/agentloom_runtime/context.py)：messages JSON 超过 60,000 字符触发摘要，近期片段目标 16,000 字符，摘要截至 6,000 字符。                                                | Token 预算、工具 Schema/协议/输出预留、压缩请求分段、压缩后重检、结构化摘要与来源链。 |
 | 工具完整性   | 正常 Loop 先完成 pending tools，再选 user/assistant 边界压缩，保留工具调用与结果组。                                                                                                                   | 显式 MessageGroup 校验、异常历史校验、持久记录与可见投影分离。                        |
 | 大结果       | engine.py 截前 24,000 字符；evidence 只保留最近 20 条，每条前 3,000 字符。                                                                                                                             | 统一内容引用与分页读取。当前提示“按文件继续读”不代表通用分段读取已可用。              |
@@ -381,12 +444,13 @@ packages/runtime/agentloom_runtime/context/  # 目标；从现有 context.py 渐
 | 阶段               | 交付                                                                                               | 验收重点                                                                                |
 | ------------------ | -------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
 | 1 · 收拢现有行为   | ContextManager 外观、Scope/Record/Group 契约，把 engine.py 与 completion.py 的组装收敛到统一入口。 | 现有 ReAct/Plan 与子任务行为保持；新增工具无需修改 ContextManager 的工具分支。          |
-| 2 · 预算与结果回读 | 模型配置对应的 BudgetPolicy、分项报告、工具 Schema 计费、原始结果外置与分页读取。                  | 超大工具结果仍保持合法协议与真实可回读引用；必需内容超限返回可定位错误。                |
-| 3 · 可恢复压缩     | 追加源记录、结构化摘要、覆盖范围、分段作业、版本化视图、原子提交。                                 | 摘要失败不丢历史；提交中断可恢复；重复压缩不把计划写成事实、不重复消费同一记录。        |
-| 4 · 资源与作用域   | 活跃 Skill、实例引用集、父子 ContextTransfer、会话摘要及权限撤回处理。                             | 压缩后保留 Skill 约束；父子与成员间无隐式历史共享；引用版本可回查。                     |
-| 5 · Hooks 与诊断   | 上下文挂点、网关最后计费、检查点 Hook 阶段、前端预算/选择原因视图。                                | Hook 增量导致超限时不发送；after 失败不重跑真实调用；purpose 过滤不破坏摘要和完成检查。 |
+| 2 · 会话历史继承 | 会话有序记录与 SessionHistorySnapshot；新提问新线程、同请求多 Loop 共用上下文。 | B 可引用 A 的问答、MCP 参数/结果、Skill 内容和恢复补充；失败记录可见，旧 pending 不执行；C 中 A 的来源只出现一次。 |
+| 3 · 预算与结果回读 | 模型配置对应的 BudgetPolicy、分项报告、工具 Schema 计费、原始结果外置与分页读取。                  | 超大工具结果仍保持合法协议与真实可回读引用；必需内容超限返回可定位错误。                |
+| 4 · 可恢复压缩     | 追加源记录、结构化摘要、覆盖范围、分段作业、版本化视图、原子提交。                                 | 摘要失败不丢历史；提交中断可恢复；重复压缩不把计划写成事实、不重复消费同一记录。        |
+| 5 · 资源与作用域   | 活跃 Skill、实例引用集、父子 ContextTransfer、会话摘要及权限撤回处理。                             | 压缩后保留 Skill 约束；父子与成员间无隐式历史共享；引用版本可回查。                     |
+| 6 · Hooks 与诊断   | 上下文挂点、网关最后计费、检查点 Hook 阶段、前端预算/选择原因视图。                                | Hook 增量导致超限时不发送；after 失败不重跑真实调用；purpose 过滤不破坏摘要和完成检查。 |
 
-**需要补充的行为测试：** 一个 assistant 同时调用多个工具；单组结果超限；超大系统 Prompt/工具 Schema；新用户补充恰好遇到压缩提交；摘要成功但持久化失败；恢复重复投递；子任务引用越权；Skill 被压缩后继续执行；资源撤回后已有摘要失效；模型前置 Hook 加入大量消息；多次压缩后仍能回查来源。使用固定小预算和可控模型响应验证边界，避免依赖真实模型偶然表现。
+**需要补充的行为测试：** 同一提问多次 Loop 保持线程标识；新提问生成新线程并继承完整历史；恢复补充进入下一新问题的历史；失败/取消记录继承且旧 pending 不重放；连续三次提问不重复继承源记录；超过 6 次提问仍能回读第一轮来源；恢复旧线程不混入后来新问题；一个 assistant 同时调用多个工具；单组结果超限；超大系统 Prompt/工具 Schema；新用户补充恰好遇到压缩提交；摘要成功但持久化失败；恢复重复投递；子任务引用越权；Skill 被压缩后继续执行；资源撤回后已有摘要失效；模型前置 Hook 加入大量消息；多次压缩后仍能回查来源。使用固定小预算和可控模型响应验证边界，避免依赖真实模型偶然表现。
 
 **观测指标：** 按 purpose 记录输入估算、实际 usage（可用时）、输出预留、分项占比、压缩前后大小、摘要调用成本、压缩耗时、超限原因、回读次数、修订冲突与幂等命中；不把这些指标等同于摘要事实质量。质量验证要用带原始证据的固定任务检查约束、结论与引用是否保留。
 
