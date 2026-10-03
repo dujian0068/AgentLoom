@@ -40,11 +40,17 @@
 
 架构图统一使用 SVG，正文直接嵌入，点击可打开原图缩放查看。所有链接均使用仓库相对路径。
 
-| 图               | SVG                                                   |
-| ---------------- | ----------------------------------------------------- |
-| 总体模块架构     | [查看矢量图](diagrams/abstract-module-architecture.svg) |
-| Runtime 与 Hooks | [查看矢量图](diagrams/agent-runtime-hooks.svg)          |
-| 上下文管理       | [查看矢量图](diagrams/context-management.svg)           |
+### 总体模块架构
+
+[![AgentLoom 总体模块架构](diagrams/abstract-module-architecture.svg)](diagrams/abstract-module-architecture.svg)
+
+### Runtime 与 Hooks
+
+[![Agent Runtime 与统一 Hooks 架构](diagrams/agent-runtime-hooks.svg)](diagrams/agent-runtime-hooks.svg)
+
+### 上下文管理
+
+[![上下文管理模块架构](diagrams/context-management.svg)](diagrams/context-management.svg)
 
 图源：[架构图生成脚本](diagrams/render_architecture.py)、[上下文图生成脚本](diagrams/render_context.py)。生成脚本使用 Python 标准库，直接生成 SVG。
 
