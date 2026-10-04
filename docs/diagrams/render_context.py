@@ -5,7 +5,7 @@ OUT = Path(__file__).parent
 W, H = 1580, 1770
 parts = [f'''<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}" role="img" aria-labelledby="title description">
 <title id="title">AgentLoom 上下文管理目标架构</title>
-<desc id="description">ContextManager 是 Agent Runtime 的内部模块，包含记录与来源、调用视图装配、Token 预算、分段摘要、激活资源跟踪及主子 Agent 作用域六个逻辑组件。每次新提问创建独立执行线程并继承完整会话历史，同一提问的多个 Loop 共用线程上下文。Loop 准备上下文，模型网关运行 Hook 后再次校验预算。工具通过事件总线与 ToolRuntime 执行；实际结果与有效视图分开保存。检查点关联源记录版本、摘要和激活资源引用。压缩仅替换视图，保留执行事实。完整 ContextManager 与 Hooks 是待实现设计。</desc>
+<desc id="description">ContextManager 是 Agent Runtime 的内部模块，包含记录与来源、调用视图装配、Token 预算、主动压缩、激活资源跟踪及主子 Agent 作用域六个逻辑组件。每次新提问创建独立执行线程并继承完整会话历史，同一提问的多个 Loop 共用线程上下文。压缩默认在有效输入预算占用率达到80%时触发，也可配置用户提问轮数或模型步骤阈值，任一条件达到即触发，目标占用率建议60%。策略随发布冻结；计数基线随历史继承和检查点恢复。Loop 准备上下文，模型网关运行 Hook 后再次校验预算。工具通过事件总线与 ToolRuntime 执行；实际结果与有效视图分开保存。检查点关联源记录版本、摘要和激活资源引用。压缩仅替换视图，保留执行事实。完整 ContextManager 与 Hooks 是待实现设计。</desc>
 <defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto-start-reverse"><path d="M0 0 L7 4 L0 8" fill="none" stroke="#8396ad" stroke-width="1.5"/></marker></defs>
 <style>text{{font-family:"PingFang SC","Hiragino Sans GB","Noto Sans CJK SC",sans-serif}}</style><rect width="{W}" height="{H}" fill="#fff"/>''']
 def rect(x,y,w,h,fill='#fff',stroke='#d7e1ec',r=12,dash=False):
@@ -36,10 +36,10 @@ text(1529,342,'新提问新线程 · 多 Loop 共用上下文',18,'#536ba4',anch
 rect(50,371,1065,564,'#f0f4ff','#7792c9')
 text(70,411,'ContextManager · 上下文管理',28,'#405aa2',650)
 text(1094,410,'下列六个组件均待实现',18,'#6d7fa2',anchor='end')
-modules=[('记录与来源','ContextRecordStore','会话顺序 · 线程归属 · 历史快照'),('调用视图装配','ContextAssembler','按 purpose 选择 · 去重 · 保留边界'),('Token 预算','BudgetPolicy','完整请求计量 · 输出预留 · 硬上限'),('分段摘要','CompactionPolicy','摘要候选 · 校验 · 版本化提交'),('激活资源','ResourceTracker','Skill 修订 · 引用 · 生命周期'),('主子作用域','InstanceScope','独立上下文 · 明确委派与结果出口')]
+modules=[('记录与来源','ContextRecordStore','会话顺序 · 线程归属 · 历史快照'),('调用视图装配','ContextAssembler','按 purpose 选择 · 去重 · 保留边界'),('Token 预算','BudgetPolicy','完整请求计量 · 输出预留 · 硬上限'),('主动压缩','CompactionPolicy','80% / 轮数触发 · 按配置压缩'),('激活资源','ResourceTracker','Skill 修订 · 引用 · 生命周期'),('主子作用域','InstanceScope','独立上下文 · 明确委派与结果出口')]
 for i,(title,name,detail) in enumerate(modules):
     card(70+(i%3)*345,446+(i//3)*129,330,110,title,name,detail)
-card(70,718,503,92,'已发布上下文策略','ContextPolicy · 固定版本 / 预算 / 选择规则',color='#277c78',tint='#f0f9f6')
+card(70,718,503,92,'已发布上下文策略','ContextPolicy · 固定版本 / 压缩触发配置',color='#277c78',tint='#f0f9f6')
 card(592,718,503,92,'只读上下文快照','ContextSnapshot · 源记录版本 / 摘要 / 引用',color='#405aa2',tint='#e8edff')
 text(70,850,'prepare 生成调用工作副本；结果按 operation_id 与源版本去重追加。',20,'#405aa2',550)
 text(70,889,'新线程继承完整交互；压缩保留来源；恢复沿用原线程与历史快照。',20)
@@ -68,7 +68,7 @@ text(50,1405,'职责边界',21,'#405aa2',650)
 text(185,1405,'ContextManager 装配资料；工具执行、RAG 检索、长期 Memory 写入由各自能力模块负责。',20)
 rect(40,1490,1500,108,'#f0f9f6','#8bbcb1')
 text(60,1528,'检查点与恢复',25,'#277c78',650)
-text(287,1528,'依赖版本集合  /  已校验摘要  /  激活资源引用  /  提交阶段  /  Hook 进度',21,'#277c78')
+text(287,1528,'依赖版本  /  摘要与压缩计数基线  /  资源引用  /  提交阶段  /  Hook 进度',21,'#277c78')
 text(60,1572,'压缩失败保留旧视图；恢复后复用已保存的实际结果，不因上下文或后置 Hook 失败重放外部操作。',20)
 rect(40,1624,1500,96,'#fff','#bcc9dc',dash=True)
 text(60,1661,'实现状态',22,'#526982',650)

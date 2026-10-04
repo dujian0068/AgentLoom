@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1580" height="1770" viewBox="0 0 1580 1770" role="img" aria-labelledby="title description">
 <title id="title">AgentLoom 上下文管理目标架构</title>
-<desc id="description">ContextManager 是 Agent Runtime 的内部模块，包含记录与来源、调用视图装配、Token 预算、分段摘要、激活资源跟踪及主子 Agent 作用域六个逻辑组件。每次新提问创建独立执行线程并继承完整会话历史，同一提问的多个 Loop 共用线程上下文。Loop 准备上下文，模型网关运行 Hook 后再次校验预算。工具通过事件总线与 ToolRuntime 执行；实际结果与有效视图分开保存。检查点关联源记录版本、摘要和激活资源引用。压缩仅替换视图，保留执行事实。完整 ContextManager 与 Hooks 是待实现设计。</desc>
+<desc id="description">ContextManager 是 Agent Runtime 的内部模块，包含记录与来源、调用视图装配、Token 预算、主动压缩、激活资源跟踪及主子 Agent 作用域六个逻辑组件。每次新提问创建独立执行线程并继承完整会话历史，同一提问的多个 Loop 共用线程上下文。压缩默认在有效输入预算占用率达到80%时触发，也可配置用户提问轮数或模型步骤阈值，任一条件达到即触发，目标占用率建议60%。策略随发布冻结；计数基线随历史继承和检查点恢复。Loop 准备上下文，模型网关运行 Hook 后再次校验预算。工具通过事件总线与 ToolRuntime 执行；实际结果与有效视图分开保存。检查点关联源记录版本、摘要和激活资源引用。压缩仅替换视图，保留执行事实。完整 ContextManager 与 Hooks 是待实现设计。</desc>
 <defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto-start-reverse"><path d="M0 0 L7 4 L0 8" fill="none" stroke="#8396ad" stroke-width="1.5"/></marker></defs>
 <style>text{font-family:"PingFang SC","Hiragino Sans GB","Noto Sans CJK SC",sans-serif}</style><rect width="1580" height="1770" fill="#fff"/>
 <text x="40" y="42" font-size="16" fill="#2862b3" font-weight="650" text-anchor="start">AGENTLOOM  /  CONTEXT MANAGEMENT</text>
@@ -41,9 +41,9 @@
 <text x="776" y="504" font-size="18" fill="#405aa2" font-weight="400" text-anchor="start">BudgetPolicy</text>
 <text x="776" y="539" font-size="17" fill="#576d85" font-weight="400" text-anchor="start">完整请求计量 · 输出预留 · 硬上限</text>
 <rect x="70" y="575" width="330" height="110" rx="12" fill="#fff" stroke="#d7e1ec" stroke-width="1.5"/>
-<text x="86" y="605" font-size="22" fill="#405aa2" font-weight="650" text-anchor="start">分段摘要</text>
+<text x="86" y="605" font-size="22" fill="#405aa2" font-weight="650" text-anchor="start">主动压缩</text>
 <text x="86" y="633" font-size="18" fill="#405aa2" font-weight="400" text-anchor="start">CompactionPolicy</text>
-<text x="86" y="668" font-size="17" fill="#576d85" font-weight="400" text-anchor="start">摘要候选 · 校验 · 版本化提交</text>
+<text x="86" y="668" font-size="17" fill="#576d85" font-weight="400" text-anchor="start">80% / 轮数触发 · 按配置压缩</text>
 <rect x="415" y="575" width="330" height="110" rx="12" fill="#fff" stroke="#d7e1ec" stroke-width="1.5"/>
 <text x="431" y="605" font-size="22" fill="#405aa2" font-weight="650" text-anchor="start">激活资源</text>
 <text x="431" y="633" font-size="18" fill="#405aa2" font-weight="400" text-anchor="start">ResourceTracker</text>
@@ -54,7 +54,7 @@
 <text x="776" y="668" font-size="17" fill="#576d85" font-weight="400" text-anchor="start">独立上下文 · 明确委派与结果出口</text>
 <rect x="70" y="718" width="503" height="92" rx="12" fill="#f0f9f6" stroke="#d7e1ec" stroke-width="1.5"/>
 <text x="86" y="748" font-size="22" fill="#277c78" font-weight="650" text-anchor="start">已发布上下文策略</text>
-<text x="86" y="776" font-size="18" fill="#277c78" font-weight="400" text-anchor="start">ContextPolicy · 固定版本 / 预算 / 选择规则</text>
+<text x="86" y="776" font-size="18" fill="#277c78" font-weight="400" text-anchor="start">ContextPolicy · 固定版本 / 压缩触发配置</text>
 <rect x="592" y="718" width="503" height="92" rx="12" fill="#e8edff" stroke="#d7e1ec" stroke-width="1.5"/>
 <text x="608" y="748" font-size="22" fill="#405aa2" font-weight="650" text-anchor="start">只读上下文快照</text>
 <text x="608" y="776" font-size="18" fill="#405aa2" font-weight="400" text-anchor="start">ContextSnapshot · 源记录版本 / 摘要 / 引用</text>
@@ -129,7 +129,7 @@
 <text x="185" y="1405" font-size="20" fill="#576d85" font-weight="400" text-anchor="start">ContextManager 装配资料；工具执行、RAG 检索、长期 Memory 写入由各自能力模块负责。</text>
 <rect x="40" y="1490" width="1500" height="108" rx="12" fill="#f0f9f6" stroke="#8bbcb1" stroke-width="1.5"/>
 <text x="60" y="1528" font-size="25" fill="#277c78" font-weight="650" text-anchor="start">检查点与恢复</text>
-<text x="287" y="1528" font-size="21" fill="#277c78" font-weight="400" text-anchor="start">依赖版本集合  /  已校验摘要  /  激活资源引用  /  提交阶段  /  Hook 进度</text>
+<text x="287" y="1528" font-size="21" fill="#277c78" font-weight="400" text-anchor="start">依赖版本  /  摘要与压缩计数基线  /  资源引用  /  提交阶段  /  Hook 进度</text>
 <text x="60" y="1572" font-size="20" fill="#576d85" font-weight="400" text-anchor="start">压缩失败保留旧视图；恢复后复用已保存的实际结果，不因上下文或后置 Hook 失败重放外部操作。</text>
 <rect x="40" y="1624" width="1500" height="96" rx="12" fill="#fff" stroke="#bcc9dc" stroke-width="1.5" stroke-dasharray="7 5"/>
 <text x="60" y="1661" font-size="22" fill="#526982" font-weight="650" text-anchor="start">实现状态</text>
