@@ -16,5 +16,6 @@ def register(registry):
             parameters=parameters({"text": {"type": "string"}}, ["text"]),
             handler=count_text,
             timeout=5,
+            implementation_id="example-text-count/v1",
         )
     )

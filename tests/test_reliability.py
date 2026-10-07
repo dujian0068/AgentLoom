@@ -10,7 +10,7 @@ import httpx
 import pytest
 from agentloom import store as db
 from agentloom.state import TASKS
-from agentloom_runtime import engine, provider
+from agentloom_runtime import provider
 from test_platform import add_agent, wait_run
 
 MODEL = {"model_id": "test-model", "base_url": "https://model.example.test/v1"}
@@ -150,7 +150,7 @@ def test_event_stream_honors_reconnect_cursor(client, model, monkeypatch):
             else json.dumps({"decision": "complete", "reason": "done", "next_action": ""}),
         }
 
-    monkeypatch.setattr(engine, "chat", chat)
+    monkeypatch.setattr(provider, "chat", chat)
     a = add_agent(client, model)
     client.post("/api/agents/" + a["id"] + "/publish")
     rid = client.post("/api/v1/agents/" + a["id"] + "/runs", json={"input": "task"}).json()[

@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 from agentloom import store as db
 from agentloom.app import app
-from agentloom_runtime import engine
+from agentloom_runtime import provider
 from agentloom_runtime.sandbox import command
 from fastapi.testclient import TestClient
 
@@ -209,7 +209,7 @@ def test_actual_engine_delegation_and_model_inheritance(client, model, monkeypat
             "content": None,
         }
 
-    monkeypatch.setattr(engine, "chat", fake_chat)
+    monkeypatch.setattr(provider, "chat", fake_chat)
     a = add_agent(client, model, subs=[child])
     client.post("/api/agents/" + a["id"] + "/publish")
     result = client.post("/api/v1/agents/" + a["id"] + "/runs", json={"input": "复杂任务"}).json()
@@ -266,7 +266,7 @@ def test_plan_step_execution_and_artifacts(client, model, monkeypatch):
             "content": None,
         }
 
-    monkeypatch.setattr(engine, "chat", fake_chat)
+    monkeypatch.setattr(provider, "chat", fake_chat)
     a = add_agent(client, model, mode="plan")
     client.post("/api/agents/" + a["id"] + "/publish")
     r = client.post(
@@ -292,7 +292,7 @@ def test_cancel_run(client, model, monkeypatch):
     async def slow(*args):
         await asyncio.sleep(60)
 
-    monkeypatch.setattr(engine, "chat", slow)
+    monkeypatch.setattr(provider, "chat", slow)
     a = add_agent(client, model)
     client.post("/api/agents/" + a["id"] + "/publish")
     r = client.post("/api/v1/agents/" + a["id"] + "/runs", json={"input": "test"}).json()

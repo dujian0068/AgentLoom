@@ -9,15 +9,13 @@ def register(registry, snapshot, *, decrypt, search):
     async def retrieve(context, args):
         libraries = bindings(snapshot, context.config, "wiki")
         result = await search(libraries, args["query"])
-        citations = context.state["citations"]
-        for row in result:
-            citations[row["id"]] = {key: value for key, value in row.items() if key != "content"}
+        citations = context.citations.record(result)
         context.emit(
             "knowledge.retrieved",
             {
                 "instance": context.instance,
                 "query": args["query"],
-                "citations": list(citations.values()),
+                "citations": citations,
             },
         )
         return result

@@ -7,7 +7,8 @@ import json
 import pytest
 from agentloom import store as db
 from agentloom.security import decrypt
-from agentloom_runtime import engine, sandbox
+from agentloom_runtime import provider, sandbox
+from agentloom_runtime.context import CharacterCompactionPolicy
 from agentloom_runtime.runtime import create_engine
 from test_platform import add_agent, config, wait_run
 
@@ -112,7 +113,7 @@ def test_dynamic_plan_repairs_failure_and_revises_steps(tmp_path, monkeypatch):
             return decision()
         return actions.pop(0)
 
-    monkeypatch.setattr(engine, "chat", model)
+    monkeypatch.setattr(provider, "chat", model)
     e, events, _ = runner(tmp_path, snapshot("plan"))
     assert asyncio.run(e.execute("资料不存在时生成说明报告")) == "已生成资料缺失报告"
     kinds = [x["kind"] for x in events]
@@ -136,7 +137,7 @@ def test_premature_answer_continues_until_file_is_verified(tmp_path, monkeypatch
     async def model(m, messages, tools, secret):
         return actions.pop(0) if tools else reviews.pop(0)
 
-    monkeypatch.setattr(engine, "chat", model)
+    monkeypatch.setattr(provider, "chat", model)
     e, events, _ = runner(tmp_path)
     result = asyncio.run(e.execute("生成报告"))
     assert result == "报告已生成并读回验证" and (tmp_path / "done.txt").exists()
@@ -169,7 +170,7 @@ def test_pending_plan_prevents_false_success(tmp_path, monkeypatch):
     async def model(m, messages, tools, secret):
         return actions.pop(0) if tools else decision()
 
-    monkeypatch.setattr(engine, "chat", model)
+    monkeypatch.setattr(provider, "chat", model)
     e, events, _ = runner(tmp_path, snapshot("plan"))
     asyncio.run(e.execute("回答问题"))
     assert [x["decision"] for x in events if x["kind"] == "completion.checked"] == [
@@ -180,8 +181,14 @@ def test_pending_plan_prevents_false_success(tmp_path, monkeypatch):
 
 def test_compaction_keeps_tool_protocol_and_original_goal(tmp_path, monkeypatch):
     e, events, _ = runner(tmp_path)
-    e.CONTEXT_CHARS = 1500
-    e.KEEP_RECENT_CHARS = 500
+    e = create_engine(
+        snapshot(),
+        tmp_path,
+        lambda k, p: events.append({"kind": k, **p}),
+        lambda s: s,
+        None,
+        compaction_policy=CharacterCompactionPolicy(1500, 500),
+    )
     history = [
         {"role": "user", "content": "历史事实" + ("x" * 1800)},
         {"role": "assistant", "content": "旧的输出"},
@@ -196,7 +203,7 @@ def test_compaction_keeps_tool_protocol_and_original_goal(tmp_path, monkeypatch)
             return answer("已读取 old.txt；还需要回答当前问题。")
         return answer("最终回答") if tools else decision()
 
-    monkeypatch.setattr(engine, "chat", model)
+    monkeypatch.setattr(provider, "chat", model)
     assert asyncio.run(e.execute("保留我的当前目标", history)) == "最终回答"
     assert any(x["kind"] == "context.compacted" for x in events)
     action = next(p for p in prompts if "CONTEXT_COMPACTION" not in p[0]["content"])
@@ -217,7 +224,7 @@ def test_resume_does_not_repeat_completed_tool(tmp_path, monkeypatch):
             return call("workspace_write", {"path": "once.txt", "content": "one"})
         raise RuntimeError("provider disconnected")
 
-    monkeypatch.setattr(engine, "chat", first)
+    monkeypatch.setattr(provider, "chat", first)
     e, _, saved = runner(tmp_path)
     with pytest.raises(RuntimeError):
         asyncio.run(e.execute("生成文件"))
@@ -230,7 +237,7 @@ def test_resume_does_not_repeat_completed_tool(tmp_path, monkeypatch):
             return answer("文件已生成")
         return decision()
 
-    monkeypatch.setattr(engine, "chat", second)
+    monkeypatch.setattr(provider, "chat", second)
     resumed, events, _ = runner(tmp_path, state=checkpoint)
     resumed.resume()
     assert asyncio.run(resumed.execute("生成文件")) == "文件已生成"
@@ -253,7 +260,7 @@ def test_uncertain_action_is_not_replayed(tmp_path, monkeypatch):
         executed.append(True)
         raise asyncio.CancelledError()
 
-    monkeypatch.setattr(engine, "chat", model)
+    monkeypatch.setattr(provider, "chat", model)
     monkeypatch.setattr(sandbox, "command", interrupted)
     e, _, saved = runner(tmp_path, snap)
     with pytest.raises(asyncio.CancelledError):
@@ -265,7 +272,7 @@ def test_uncertain_action_is_not_replayed(tmp_path, monkeypatch):
             return answer("需要确认外部结果")
         return decision("blocked", "外部操作结果未知", "请提供外部状态")
 
-    monkeypatch.setattr(engine, "chat", resume_model)
+    monkeypatch.setattr(provider, "chat", resume_model)
     resumed, events, _ = runner(tmp_path, snap, saved[-1])
     resumed.resume()
     asyncio.run(resumed.execute("执行任务"))
@@ -292,7 +299,7 @@ def test_resume_child_preserves_same_instance_and_model(tmp_path, monkeypatch):
             raise asyncio.CancelledError()
         return call("delegate_task", {"subagent_id": "child", "task": "执行子任务"})
 
-    monkeypatch.setattr(engine, "chat", first)
+    monkeypatch.setattr(provider, "chat", first)
     e, _, saved = runner(tmp_path, snap)
     with pytest.raises(asyncio.CancelledError):
         asyncio.run(e.execute("复杂任务"))
@@ -303,7 +310,7 @@ def test_resume_child_preserves_same_instance_and_model(tmp_path, monkeypatch):
             return decision()
         return answer("子任务完成" if "CHILD" in messages[0]["content"] else "汇总完成")
 
-    monkeypatch.setattr(engine, "chat", second)
+    monkeypatch.setattr(provider, "chat", second)
     resumed, events, _ = runner(tmp_path, snap, saved[-1])
     resumed.resume()
     assert asyncio.run(resumed.execute("复杂任务")) == "汇总完成"
@@ -315,7 +322,7 @@ def test_blocked_run_history_and_resume_api(client, model, monkeypatch):
     async def first(m, messages, tools, secret):
         return answer("需要项目名") if tools else decision("blocked", "缺少项目名", "提供项目名")
 
-    monkeypatch.setattr(engine, "chat", first)
+    monkeypatch.setattr(provider, "chat", first)
     a = add_agent(client, model)
     client.post("/api/agents/" + a["id"] + "/publish")
     rid = client.post("/api/v1/agents/" + a["id"] + "/runs", json={"input": "生成介绍"}).json()[
@@ -333,7 +340,7 @@ def test_blocked_run_history_and_resume_api(client, model, monkeypatch):
         seen.append(json.dumps(messages, ensure_ascii=False))
         return answer("织点的项目介绍") if tools else decision()
 
-    monkeypatch.setattr(engine, "chat", second)
+    monkeypatch.setattr(provider, "chat", second)
     # A draft edit does not change the version resumed by this task.
     client.put("/api/agents/" + a["id"], json=config(model, prompt="新草稿"))
     r = client.post("/api/v1/runs/" + rid + "/resume", json={"input": "项目叫织点", "stream": True})
@@ -355,7 +362,7 @@ def test_restart_marks_checkpoint_run_interrupted(client, model, monkeypatch):
     async def fake(m, messages, tools, secret):
         return answer("等待信息") if tools else decision("blocked", "需要输入", "补充信息")
 
-    monkeypatch.setattr(engine, "chat", fake)
+    monkeypatch.setattr(provider, "chat", fake)
     a = add_agent(client, model)
     client.post("/api/agents/" + a["id"] + "/publish")
     rid = client.post("/api/v1/agents/" + a["id"] + "/runs", json={"input": "test"}).json()[
@@ -398,7 +405,7 @@ def test_malformed_tool_arguments_feed_back_without_breaking_loop(tmp_path, monk
         assert messages[-1]["role"] == "tool" and "error" in messages[-1]["content"]
         return answer("参数有误，需要补充")
 
-    monkeypatch.setattr(engine, "chat", fake)
+    monkeypatch.setattr(provider, "chat", fake)
     e, events, _ = runner(tmp_path)
     asyncio.run(e.execute("写文件"))
     assert e.blocked and any(x["kind"] == "tool.failed" for x in events)
@@ -412,7 +419,7 @@ def test_same_space_other_user_cannot_resume_task(client, model, monkeypatch):
     async def fake(m, messages, tools, secret):
         return answer("等待输入") if tools else decision("blocked", "需要输入", "补充信息")
 
-    monkeypatch.setattr(engine, "chat", fake)
+    monkeypatch.setattr(provider, "chat", fake)
     a = add_agent(client, model)
     client.post("/api/agents/" + a["id"] + "/publish")
     rid = client.post("/api/v1/agents/" + a["id"] + "/runs", json={"input": "task"}).json()[

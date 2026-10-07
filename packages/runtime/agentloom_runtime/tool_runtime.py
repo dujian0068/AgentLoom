@@ -1,25 +1,77 @@
 """Tool catalog and request handler; the model loop never selects implementations."""
 
 import asyncio
+import copy
 import json
+from contextlib import contextmanager
+from dataclasses import replace
 
 from jsonschema import ValidationError
 from jsonschema.validators import validator_for
 
 from .event_bus import EventBus
-from .tool_contracts import TOOL_REQUEST_TOPIC, ToolDefinition, ToolOutcome, bindings
+from .tool_contracts import (
+    TOOL_REQUEST_TOPIC,
+    ToolDefinition,
+    ToolOutcome,
+    ToolPersistenceError,
+    bindings,
+)
 
 
 class ToolRegistry:
     def __init__(self):
         self._definitions = {}
         self._validators = {}
+        self._frozen = False
+        self._implementation_namespace = None
+
+    @property
+    def frozen(self):
+        return self._frozen
+
+    def freeze(self):
+        self._frozen = True
+        return self
+
+    @contextmanager
+    def implementation_namespace(self, namespace):
+        """Explicitly version one registration batch; later custom tools stay unversioned."""
+        if self._frozen:
+            raise RuntimeError("工具注册表已冻结，运行期间不可注册工具")
+        if not isinstance(namespace, str) or not namespace.strip():
+            raise ValueError("工具实现命名空间不能为空")
+        previous = self._implementation_namespace
+        self._implementation_namespace = namespace
+        try:
+            yield self
+        finally:
+            self._implementation_namespace = previous
 
     def register(self, definition: ToolDefinition):
+        if self._frozen:
+            raise RuntimeError("工具注册表已冻结，运行期间不可注册工具")
         if definition.name in self._definitions:
             raise ValueError("工具名称重复：" + definition.name)
         if definition.timeout <= 0:
             raise ValueError("工具超时必须大于零")
+        implementation_id = definition.implementation_id
+        if implementation_id is None and self._implementation_namespace is not None:
+            handler = definition.handler
+            module = getattr(handler, "__module__", type(handler).__module__)
+            name = getattr(handler, "__qualname__", type(handler).__qualname__)
+            implementation_id = f"{self._implementation_namespace}:{module}.{name}"
+        if implementation_id is not None and (
+            not isinstance(implementation_id, str) or not implementation_id.strip()
+        ):
+            raise ValueError("工具实现版本不能为空")
+        # Callables retain their identity; callers cannot mutate the registered schema.
+        definition = replace(
+            definition,
+            parameters=copy.deepcopy(definition.parameters),
+            evidence_fields=tuple(definition.evidence_fields),
+            implementation_id=implementation_id,
+        )
         validator = validator_for(definition.parameters)
         validator.check_schema(definition.parameters)
         self._definitions[definition.name] = definition
@@ -29,7 +81,23 @@ class ToolRegistry:
         definition = self._definitions.get(name)
         if definition is None or not definition.available(config, instance):
             raise ValueError("工具未授权")
-        return definition
+        return replace(definition, parameters=copy.deepcopy(definition.parameters))
+
+    def bindings(self):
+        """Detached, deterministic checkpoint manifest; None is explicitly unversioned."""
+        return [
+            {
+                "name": definition.name,
+                "description": definition.description,
+                "parameters": copy.deepcopy(definition.parameters),
+                "before_plan": definition.before_plan,
+                "resume_inflight": definition.resume_inflight,
+                "timeout": definition.timeout,
+                "evidence_fields": list(definition.evidence_fields),
+                "implementation_id": definition.implementation_id,
+            }
+            for _, definition in sorted(self._definitions.items())
+        ]
 
     def definitions(self, config, instance):
         return [
@@ -50,13 +118,18 @@ class ToolRegistry:
 class ToolRuntime:
     def __init__(self, snapshot, registry=None, bus=None):
         self.snapshot = snapshot
-        self.registry = registry or ToolRegistry()
+        self.registry = (registry or ToolRegistry()).freeze()
         self.bus = bus or EventBus()
         self._owns_bus = bus is None
-        self.bus.register(TOOL_REQUEST_TOPIC, self._execute)
+        self._unregister = self.bus.register(TOOL_REQUEST_TOPIC, self._execute)
+        self._closed = False
+        self._closing = False
 
     def definitions(self, config, instance):
         return self.registry.definitions(config, instance)
+
+    def bindings(self):
+        return self.registry.bindings()
 
     def instructions(self, config, instance):
         hints = []
@@ -94,6 +167,8 @@ class ToolRuntime:
         return state
 
     async def _execute(self, event):
+        if self._closed or self._closing:
+            raise RuntimeError("工具运行时已关闭")
         request, context = event.payload, event.context
         trace = {
             "instance": context.instance,
@@ -115,18 +190,14 @@ class ToolRuntime:
                 raise RuntimeError(
                     "上次调用在执行中中断，结果未知；先检查文件或外部状态，避免重复有副作用的操作"
                 )
-            if (
-                context.instance == "main"
-                and context.config["mode"] == "plan"
-                and not context.frame["plan"]
-                and not definition.before_plan
-            ):
-                raise ValueError("Plan 策略需要先调用 update_plan 创建执行计划")
+            context.authorize_tool(definition)
             async with asyncio.timeout(definition.timeout):
                 result = await definition.handler(context, arguments)
             json.dumps(result, ensure_ascii=False, allow_nan=False)
         except asyncio.CancelledError:
             context.emit("tool.cancelled", trace)
+            raise
+        except ToolPersistenceError:
             raise
         except Exception as exc:
             error = (
@@ -140,5 +211,15 @@ class ToolRuntime:
         return ToolOutcome(result, "succeeded", evidence)
 
     async def close(self):
-        if self._owns_bus:
-            await self.bus.close()
+        if self._closed:
+            return
+        self._closing = True
+        try:
+            if self._owns_bus:
+                await self.bus.close()
+            else:
+                await self.bus.cancel_topic(TOOL_REQUEST_TOPIC)
+            self._unregister()
+            self._closed = True
+        finally:
+            self._closing = False

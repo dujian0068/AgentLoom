@@ -1,6 +1,5 @@
 """Expose plan management through the same capability boundary as tools."""
 
-from ..planning import update_plan
 from ..tool_contracts import ToolDefinition, parameters
 
 S = {"type": "string"}
@@ -17,7 +16,7 @@ PLAN_ITEM = {
 
 
 async def update(context, args):
-    return update_plan(context, context.frame, args, context.instance)
+    return context.plan.update(args["steps"], args["explanation"])
 
 
 def register(registry, snapshot, *, decrypt, search):

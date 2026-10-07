@@ -2,11 +2,11 @@ AGENTLOOM / RUNTIME DESIGN
 
 # 上下文管理设计
 
-独立设计文档 · v0.1 · 2026-10-04 · 增订会话语义与可配置主动压缩策略；基于当前代码静态核对
+独立设计文档 · v0.1 · 2026-10-07 · 保留会话语义与主动压缩目标；增订模块化实现进展
 
 **ContextManager 决定每次模型调用看到什么，并保证这些信息在预算内、来源可追溯、主子任务相互隔离、运行中断后可恢复。** 它属于 Agent Runtime，与 Loop、HookManager、计划管理和检查点协作。
 
-> **实现状态：** 当前已有消息组装、按字符触发的历史摘要和实例检查点；尚未实现本文定义的 ContextManager、类型化记录、Token 预算器、可配置主动压缩和版本化上下文视图。下文的接口、配置与模块名均为拟议设计，本次仅更新文档与模块图。
+> **实现状态：** 当前已有消息组装、可注入的 `CompactionPolicy` / `CharacterCompactionPolicy`、`CompletionPolicy`、ModelGateway 和实例检查点，见[Runtime 模块化实现 v0.1](runtime-modularity-v0.1.md)。默认仍按字符压缩；本文的独立 ContextManager、类型化来源记录、Token 预算器、80% / 轮数主动压缩、完整会话历史继承、Memory 与版本化视图仍未实现。下文目标接口不能当作已可导入的 SDK；第 12 节单列当前代码边界。
 
 **已确认的会话语义：** 一次新提问创建独立 Run 与主执行线程；该请求的多次 Loop 共用该线程上下文。同一会话的下一次新提问继承此前完整的、已授权的交互历史，包括问答、模型消息、工具调用参数与结果、MCP、Skill 加载内容及资源引用。继承范围不限制为成功任务或最终问答；中断恢复与用户补充继续原 Run/线程。详见[第 8 节](#scope)。
 
@@ -489,20 +489,22 @@ packages/runtime/agentloom_runtime/context/  # 目标；从现有 context.py 渐
 
 ## 12. 当前实现与目标差距
 
-下表基于静态代码核对。本文没有重新运行后端测试，也没有修改运行代码或数据库。
+下表于 2026-10-07 按模块化代码核对；这里只更新实现状态，目标设计的全部验收尚未完成。已可运行的注入方式与验证范围见[模块化实现记录](runtime-modularity-v0.1.md)。
 
 | 能力         | 现有实现                                                                                                                                                                                               | 需要补齐                                                                              |
 | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------- |
 | 初始组装     | [engine.py](../packages/runtime/agentloom_runtime/engine.py) 的 prompt / loop：Agent Prompt + Loop 规则 + Skill/子 Agent 目录 + 历史 + 当前任务。                                                      | 独立 Assembler、类型化来源、分区与调用目的策略。                                      |
 | 会话历史     | [routes/runs.py](../apps/api/agentloom/routes/runs.py) 新 Run 读取同会话最近 6 个成功 Run 的用户输入与最终输出。                                                                                       | 新提问独立线程、完整历史快照继承；目前缺少旧工具/MCP/Skill 过程，恢复补充原文也未完整进入后续新 Run 历史。                      |
-| 压缩与预算   | [context.py](../packages/runtime/agentloom_runtime/context.py)：messages JSON 超过 60,000 字符触发摘要，近期片段目标 16,000 字符，摘要截至 6,000 字符。                                                | Token 预算与分项计费、可配置 80% / 轮数主动触发、持久计数基线、分段压缩、重检与来源链；配置 UI 尚未实现。 |
-| 工具完整性   | 正常 Loop 先完成 pending tools，再选 user/assistant 边界压缩，保留工具调用与结果组。                                                                                                                   | 显式 MessageGroup 校验、异常历史校验、持久记录与可见投影分离。                        |
+| 压缩与预算   | [context.py](../packages/runtime/agentloom_runtime/context.py) 的 `CharacterCompactionPolicy` 可注入并返回候选消息，由 Engine 提交；默认 messages JSON 超过 60,000 字符触发，近期目标 16,000、摘要截至 6,000 字符。                                                | Token 预算与分项计费、可配置 80% / 轮数主动触发、持久计数基线、分段压缩、重检与来源链；配置 UI 尚未实现。 |
+| 工具完整性   | 正常 Loop 先完成 pending tools，再选 user/assistant 边界压缩；压缩候选提交前校验首条系统消息及工具调用/结果完整性。                                                                                                                   | 显式 MessageGroup 校验、异常历史校验、持久记录与可见投影分离。                        |
 | 大结果       | engine.py 截前 24,000 字符；evidence 只保留最近 20 条，每条前 3,000 字符。                                                                                                                             | 统一内容引用与分页读取。当前提示“按文件继续读”不代表通用分段读取已可用。              |
 | Skill        | [tool_runtime.py](../packages/runtime/agentloom_runtime/tool_runtime.py) 提供目录；[handlers/skills.py](../packages/runtime/agentloom_runtime/handlers/skills.py) 按需加载，附件读取截前 20,000 字符。 | 激活状态、固定内容版本、压缩后的指令保留与回读闭环。                                  |
 | RAG / Memory | [handlers/knowledge.py](../packages/runtime/agentloom_runtime/handlers/knowledge.py) 通过工具检索，引用元数据在整个 Run 的 citations 集合。未发现长期记忆实现。                                        | 实例级引用集合、带权限的投影、版本与失效处理；Memory 后续独立设计。                   |
-| 子任务       | [handlers/delegation.py](../packages/runtime/agentloom_runtime/handlers/delegation.py) 建独立 frame，history 为空，继承模型；status/output 作为父工具结果返回。                                        | 类型化背景转交与结构化证据/引用导出。                                                 |
-| 完成检查     | [completion.py](../packages/runtime/agentloom_runtime/completion.py) 单独截取 evidence、近期消息和候选回答，purpose=verification。                                                                     | 统一计费与明确目的映射；继续依赖真实状态而非摘要自述。                                |
-| 恢复         | [services/runs.py](../apps/api/agentloom/services/runs.py) 加密保存 Engine state；恢复原实例和发布快照。恢复时用户补充在 pending 组闭合后进入对话。                                                    | 源记录水位、摘要修订、CAS 提交、调用最终输入引用、幂等追加与 Hook 阶段恢复。          |
+| 子任务       | [handlers/delegation.py](../packages/runtime/agentloom_runtime/handlers/delegation.py) 经 ChildRunner 调用 [execution_services.py](../packages/runtime/agentloom_runtime/execution_services.py) 的宿主适配器；子 frame/history 及模型继承行为不变，返回 status/output。                                        | 类型化背景转交与结构化证据/引用导出。                                                 |
+| 完成检查     | [completion.py](../packages/runtime/agentloom_runtime/completion.py) 的 `EvidenceCompletionPolicy` 可注入；接收工作副本并返回 CompletionDecision，默认仍截取证据/消息，purpose=verification。                                                                     | 统一计费与明确目的映射；继续依赖真实状态而非摘要自述。                                |
+| 恢复         | [services/runs.py](../apps/api/agentloom/services/runs.py) 加密保存 format=1 Engine state；恢复校验模块绑定/配置并沿用原实例及发布快照。补充在 pending 组闭合后进入对话。                                                    | 源记录水位、摘要修订、CAS 提交、调用最终输入引用、幂等追加与 Hook 阶段恢复。          |
+
+`CompactionPolicy` 当前只是可替换的压缩端口：策略接收 task、plan、messages、instance 的工作副本，通过受控 ModelCall 请求模型，返回 `CompactionResult | None`；不再要求 `compact(engine, ...)` 读取整个引擎。它尚未承担本文设计的持久来源、水位、预算和摘要版本管理。
 
 [test_harness.py](../tests/test_harness.py) 已有模拟模型测试覆盖压缩触发/目标保留/工具配对、恢复不重跑已完成工具、未知副作用保护、子实例恢复与加密检查点。这些测试不等于本文的完整上下文设计已经实现。
 

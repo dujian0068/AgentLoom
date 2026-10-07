@@ -12,7 +12,7 @@ sys.path.insert(0, str(ROOT / "apps/api"))
 sys.path.insert(0, str(ROOT / "packages/runtime"))
 import uvicorn
 from agentloom.app import app
-from agentloom_runtime import engine
+from agentloom_runtime import provider
 from fastapi.testclient import TestClient
 
 
@@ -79,7 +79,7 @@ async def fixture_model(model, messages, tools, secret):
     }
 
 
-engine.chat = fixture_model
+provider.chat = fixture_model
 with TestClient(app) as client:
     if client.get("/api/auth/status").json()["needs_setup"]:
         client.post(

@@ -5,12 +5,14 @@ import copy
 import json
 
 import pytest
-from agentloom_runtime import engine, mcp_tools
+from agentloom_runtime import mcp_tools, provider
+from agentloom_runtime.event_bus import EventBus, UnknownTopicError
+from agentloom_runtime.execution_services import build_tool_context
 from agentloom_runtime.runtime import create_engine
 from agentloom_runtime.tool_contracts import (
     TOOL_REQUEST_TOPIC,
-    ToolContext,
     ToolDefinition,
+    ToolPersistenceError,
     ToolRequest,
     parameters,
 )
@@ -26,10 +28,10 @@ def tool_context(tmp_path, events, config=None):
     async def no_child(*args):
         raise AssertionError("This request should not create a child")
 
-    return ToolContext(
+    return build_tool_context(
         config=config or snapshot()["config"],
         frame={"plan": []},
-        state={"frames": {}, "delegations": 0},
+        state={"frames": {}, "delegations": 0, "citations": {}},
         pending={},
         instance="main",
         root_workspace=tmp_path,
@@ -70,7 +72,7 @@ def test_new_registered_tool_runs_through_loop_and_correlated_bus(tmp_path, monk
         assert json.loads(messages[-1]["content"]) == {"converted": 42}
         return answer("转换结果为 42")
 
-    monkeypatch.setattr(engine, "chat", fake_model)
+    monkeypatch.setattr(provider, "chat", fake_model)
     runtime = create_engine(
         snapshot(),
         tmp_path,
@@ -218,7 +220,7 @@ def test_child_cannot_use_main_resources_or_escape_its_workspace(tmp_path, monke
             return child_actions.pop(0)
         return main_actions.pop(0)
 
-    monkeypatch.setattr(engine, "chat", fake_model)
+    monkeypatch.setattr(provider, "chat", fake_model)
     monkeypatch.setattr(mcp_tools, "call", fake_mcp)
     runtime, events, _ = runner(tmp_path, snap)
 
@@ -364,7 +366,7 @@ def test_legacy_main_pending_resumes_ready_tool_once(tmp_path, monkeypatch):
             return answer("旧任务已恢复")
         return decision()
 
-    monkeypatch.setattr(engine, "chat", fake_model)
+    monkeypatch.setattr(provider, "chat", fake_model)
     resumed, events, _ = runner(tmp_path, state=checkpoint)
     resumed.resume()
 
@@ -398,7 +400,7 @@ def test_legacy_child_pending_restores_same_child_and_private_handler_state(tmp_
             raise asyncio.CancelledError()
         return call("delegate_task", {"subagent_id": "child", "task": "恢复子任务"}, "delegate-old")
 
-    monkeypatch.setattr(engine, "chat", interrupted)
+    monkeypatch.setattr(provider, "chat", interrupted)
     first, _, saved = runner(tmp_path, snap)
 
     async def interrupt():
@@ -428,7 +430,7 @@ def test_legacy_child_pending_restores_same_child_and_private_handler_state(tmp_
             return child_actions.pop(0)
         return answer("汇总已恢复")
 
-    monkeypatch.setattr(engine, "chat", resumed_model)
+    monkeypatch.setattr(provider, "chat", resumed_model)
     resumed, events, checkpoints = runner(tmp_path, snap, legacy)
     resumed.resume()
 
@@ -465,4 +467,383 @@ def test_duplicate_tool_name_is_rejected():
     registry.register(definition)
     with pytest.raises(ValueError, match="重复"):
         registry.register(definition)
-    assert registry.resolve("duplicate", {}, "main") is definition
+    assert registry.resolve("duplicate", {}, "main") == definition
+    assert registry.resolve("duplicate", {}, "main").handler is definition.handler
+
+
+def test_tool_context_has_detached_readonly_config_and_no_loop_state(tmp_path):
+    config = snapshot()["config"]
+    config["subs"] = [{"id": "worker", "tools": ["allowed"]}]
+    context = tool_context(tmp_path, [], config)
+    config["subs"][0]["tools"].append("later")
+    assert context.config["subs"][0]["tools"] == ("allowed",)
+    with pytest.raises(TypeError):
+        context.config["mode"] = "plan"
+    with pytest.raises(TypeError):
+        context.config["subs"][0]["id"] = "replacement"
+    for name in ("state", "frame", "pending", "persist", "run_child"):
+        assert not hasattr(context, name)
+
+
+def host_context(tmp_path, *, save=None, emit=None, run_child=None, config=None, state=None):
+    frame = {"plan": []}
+    state = state if state is not None else {"frames": {}, "delegations": 0, "citations": {}}
+    pending = {}
+
+    async def no_child(*args):
+        raise AssertionError("unexpected child")
+
+    context = build_tool_context(
+        config=config or snapshot()["config"],
+        frame=frame,
+        state=state,
+        pending=pending,
+        instance="main",
+        root_workspace=tmp_path,
+        emit=emit or (lambda *args: None),
+        persist=save or (lambda: None),
+        run_child=run_child or no_child,
+    )
+    return context, frame, state, pending
+
+
+def test_capability_writes_are_saved_before_observation_and_detached(tmp_path):
+    saves, events = [], []
+    context, frame, state, pending = host_context(
+        tmp_path,
+        save=lambda: saves.append(copy.deepcopy((frame, state, pending))),
+        emit=lambda kind, payload: events.append((kind, len(saves))),
+    )
+    steps = [{"id": "a", "step": "检查", "status": "in_progress"}]
+    result = context.plan.update(steps, "开始")
+    steps[0]["step"] = "input changed"
+    result["steps"][0]["step"] = "result changed"
+    assert frame["plan"][0]["step"] == "检查"
+    with pytest.raises(TypeError):
+        context.plan.read()[0]["step"] = "snapshot changed"
+    assert events == [("plan.created", 1), ("step.started", 1)]
+    citations_ref = state["citations"]
+    context.citations.record([{"id": "doc:1", "file": "a.txt", "content": "raw text"}])
+    assert state["citations"] is citations_ref
+    assert citations_ref == {"doc:1": {"id": "doc:1", "file": "a.txt"}}
+    context.invocation.set("cursor", {"page": 2})
+    cursor = context.invocation.get("cursor")
+    cursor["page"] = 99
+    assert pending["cursor"] == {"page": 2}
+    assert len(saves) == 3
+
+
+@pytest.mark.parametrize("capability", ["plan", "citations", "invocation", "child"])
+def test_failed_capability_checkpoint_restores_state_and_propagates(tmp_path, capability):
+    events, children = [], []
+
+    def failed_save():
+        raise OSError("storage unavailable")
+
+    async def child(*args):
+        children.append(args)
+
+    config = snapshot(subs=[{"id": "worker", "name": "Worker"}])["config"]
+    context, frame, state, pending = host_context(
+        tmp_path,
+        save=failed_save,
+        emit=lambda *args: events.append(args),
+        run_child=child,
+        config=config,
+    )
+    before = copy.deepcopy((frame, state, pending))
+    with pytest.raises(ToolPersistenceError):
+        if capability == "plan":
+            context.plan.update([{"id": "a", "step": "检查", "status": "pending"}], "开始")
+        elif capability == "citations":
+            context.citations.record([{"id": "doc:1", "content": "raw"}])
+        elif capability == "invocation":
+            context.invocation.set("cursor", 2)
+        else:
+            asyncio.run(context.children.run("worker", "do work"))
+    assert (frame, state, pending) == before
+    assert not events and not children
+
+
+def test_child_service_reuses_saved_identity_and_enforces_global_limit(tmp_path):
+    calls, saves = [], []
+    state = {"frames": {}, "delegations": 7, "citations": {}}
+
+    async def run_child(config, task, history, instance):
+        calls.append(instance)
+        assert saves[-1][1]["child_instance"] == instance
+        state["frames"][instance] = {"outcome": "complete"}
+        return "done"
+
+    config = snapshot(subs=[{"id": "worker", "name": "Worker"}])["config"]
+    context, _, _, pending = host_context(
+        tmp_path,
+        config=config,
+        state=state,
+        run_child=run_child,
+        save=lambda: saves.append(copy.deepcopy((state, pending))),
+    )
+    assert asyncio.run(context.children.run("worker", "task")) == {
+        "status": "complete",
+        "output": "done",
+    }
+    assert asyncio.run(context.children.run("worker", "task"))["output"] == "done"
+    assert calls == ["sub-8", "sub-8"] and state["delegations"] == 8
+    other, _, _, _ = host_context(tmp_path, config=config, state=state, run_child=run_child)
+    with pytest.raises(ValueError, match="数量限制"):
+        asyncio.run(other.children.run("worker", "another task"))
+
+
+@pytest.mark.parametrize("observer_error", [RuntimeError, asyncio.CancelledError])
+def test_notification_failure_or_mutation_does_not_change_tool_result(
+    tmp_path, caplog, observer_error
+):
+    result = {"value": "completed side effect"}
+    executions = []
+
+    async def action(context, args):
+        executions.append(True)
+        return result
+
+    def broken_observer(kind, payload):
+        if "result" in payload:
+            payload["result"]["value"] = "tampered"
+        raise observer_error("secret payload must not be logged")
+
+    context, _, _, _ = host_context(tmp_path, emit=broken_observer)
+    registry = ToolRegistry()
+    registry.register(ToolDefinition("action", "Action", parameters({}), action))
+    runtime = ToolRuntime(snapshot(), registry)
+
+    async def run():
+        try:
+            outcome = await runtime.bus.request(
+                TOOL_REQUEST_TOPIC,
+                ToolRequest("id", "action", "{}"),
+                context=context,
+            )
+            assert outcome.status == "succeeded"
+            assert outcome.value == {"value": "completed side effect"}
+        finally:
+            await runtime.close()
+
+    asyncio.run(run())
+    assert executions == [True]
+    assert "secret payload" not in caplog.text
+    assert "completed side effect" not in caplog.text
+
+
+def test_persistence_error_is_not_converted_to_failed_tool_outcome(tmp_path):
+    async def action(context, args):
+        context.invocation.set("stage", "accepted")
+
+    def failed_save():
+        raise OSError("disk failure")
+
+    context, _, _, pending = host_context(tmp_path, save=failed_save)
+    registry = ToolRegistry()
+    registry.register(ToolDefinition("action", "Action", parameters({}), action))
+    runtime = ToolRuntime(snapshot(), registry)
+
+    async def run():
+        try:
+            with pytest.raises(ToolPersistenceError):
+                await runtime.bus.request(
+                    TOOL_REQUEST_TOPIC,
+                    ToolRequest("id", "action", "{}"),
+                    context=context,
+                )
+        finally:
+            await runtime.close()
+
+    asyncio.run(run())
+    assert pending == {}
+
+
+def test_registry_freezes_and_shared_bus_binding_is_released(tmp_path):
+    cleaned = []
+
+    async def run():
+        bus = EventBus()
+        started, release = asyncio.Event(), asyncio.Event()
+
+        async def delayed(context, args):
+            try:
+                started.set()
+                await release.wait()
+            finally:
+                cleaned.append(True)
+
+        async def other(event):
+            return "other capability"
+
+        bus.register("other", other)
+        registry = ToolRegistry()
+        definition = ToolDefinition("delayed", "Delayed", parameters({}), delayed)
+        registry.register(definition)
+        runtime = ToolRuntime(snapshot(), registry, bus)
+        assert registry.frozen
+        with pytest.raises(RuntimeError, match="冻结"):
+            registry.register(ToolDefinition("late", "Late", parameters({}), delayed))
+        request = asyncio.create_task(
+            bus.request(
+                TOOL_REQUEST_TOPIC,
+                ToolRequest("id", "delayed", "{}"),
+                context=tool_context(tmp_path, []),
+            )
+        )
+        await asyncio.wait_for(started.wait(), 1)
+        await runtime.close()
+        await runtime.close()
+        with pytest.raises(asyncio.CancelledError):
+            await request
+        assert cleaned == [True]
+        assert await bus.request("other", None) == "other capability"
+        with pytest.raises(UnknownTopicError):
+            await bus.request(TOOL_REQUEST_TOPIC, ToolRequest("id2", "delayed", "{}"))
+        replacement = ToolRuntime(snapshot(), registry, bus)
+        await replacement.close()
+        await bus.close()
+
+    asyncio.run(run())
+
+
+def test_tool_authorization_is_supplied_by_execution_strategy(tmp_path):
+    from dataclasses import replace
+
+    called = []
+
+    async def action(context, args):
+        called.append(True)
+        return "done"
+
+    config = snapshot()["config"]
+    config["mode"] = "plan"
+    context = tool_context(tmp_path, [], config)
+    registry = ToolRegistry()
+    registry.register(ToolDefinition("action", "Action", parameters({}), action))
+    runtime = ToolRuntime(snapshot(), registry)
+
+    def reject(definition):
+        raise ValueError("strategy rejected action")
+
+    async def run():
+        try:
+            # The tool dispatcher does not impose a concrete Plan strategy.
+            result = await runtime.bus.request(
+                TOOL_REQUEST_TOPIC,
+                ToolRequest("first", "action", "{}"),
+                context=context,
+            )
+            assert result.status == "succeeded"
+            result = await runtime.bus.request(
+                TOOL_REQUEST_TOPIC,
+                ToolRequest("second", "action", "{}"),
+                context=replace(context, authorize_tool=reject),
+            )
+            assert result.status == "failed" and "strategy rejected" in result.value["error"]
+        finally:
+            await runtime.close()
+
+    asyncio.run(run())
+    assert called == [True]
+
+
+def test_builtin_registration_namespace_does_not_version_custom_tools():
+    async def handler(context, args):
+        return "done"
+
+    registry = ToolRegistry()
+    with registry.implementation_namespace("builtin-tools/v1"):
+        registry.register(ToolDefinition("builtin", "Builtin", parameters({}), handler))
+        registry.register(
+            ToolDefinition(
+                "explicit",
+                "Explicit",
+                parameters({}),
+                handler,
+                implementation_id="custom-explicit/v3",
+            )
+        )
+    registry.register(ToolDefinition("custom", "Custom", parameters({}), handler))
+    items = {item["name"]: item for item in registry.bindings()}
+    assert list(items) == ["builtin", "custom", "explicit"]
+    assert items["builtin"]["implementation_id"] == (
+        f"builtin-tools/v1:{handler.__module__}.{handler.__qualname__}"
+    )
+    assert items["explicit"]["implementation_id"] == "custom-explicit/v3"
+    assert items["custom"]["implementation_id"] is None
+    with pytest.raises(RuntimeError, match="registration failed"):
+        with registry.implementation_namespace("temporary/v2"):
+            raise RuntimeError("registration failed")
+    registry.register(ToolDefinition("after-error", "After", parameters({}), handler))
+    assert registry.bindings()[0]["implementation_id"] is None
+    registry.freeze()
+    with pytest.raises(RuntimeError, match="冻结"):
+        with registry.implementation_namespace("too-late/v1"):
+            pass
+
+
+def test_registry_schema_snapshots_cannot_change_validation_or_checkpoint_manifest():
+    async def handler(context, args):
+        return args
+
+    schema = parameters({"count": {"type": "integer"}}, ["count"])
+    definition = ToolDefinition(
+        "count",
+        "Count",
+        schema,
+        handler,
+        implementation_id="count/v1",
+        before_plan=True,
+        resume_inflight=True,
+        timeout=12,
+        evidence_fields=("count",),
+    )
+    registry = ToolRegistry()
+    registry.register(definition)
+    runtime = ToolRuntime(snapshot(), registry)
+    expected = copy.deepcopy(runtime.bindings())
+    assert expected[0]["before_plan"] is True
+    assert expected[0]["resume_inflight"] is True
+    assert expected[0]["timeout"] == 12
+    assert expected[0]["evidence_fields"] == ["count"]
+    schema["properties"]["count"]["type"] = "string"
+    exposed = registry.resolve("count", {}, "main")
+    assert exposed.handler is handler
+    exposed.parameters["properties"]["count"]["type"] = "string"
+    registry.definitions({}, "main")[0]["function"]["parameters"]["required"].clear()
+    runtime.bindings()[0]["parameters"]["properties"].clear()
+    registry.bindings()[0]["evidence_fields"].clear()
+    definition.model_schema()["function"]["parameters"]["properties"].clear()
+    assert schema["properties"] == {"count": {"type": "string"}}
+    assert runtime.bindings() == expected
+    registry.validate("count", {"count": 2})
+    with pytest.raises(ValueError, match="参数不合法"):
+        registry.validate("count", {"count": "changed schema must not be accepted"})
+    asyncio.run(runtime.close())
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [
+        {"implementation_id": "handler/v2"},
+        {"timeout": 5},
+        {"before_plan": True},
+        {"resume_inflight": True},
+        {"parameters": parameters({"added": {"type": "string"}})},
+    ],
+)
+def test_registry_manifest_changes_when_executable_contract_changes(changed):
+    from dataclasses import replace
+
+    async def handler(context, args):
+        return "done"
+
+    definition = ToolDefinition(
+        "action", "Action", parameters({}), handler, implementation_id="handler/v1"
+    )
+    before, after = ToolRegistry(), ToolRegistry()
+    before.register(definition)
+    after.register(replace(definition, **changed))
+    assert before.bindings() != after.bindings()

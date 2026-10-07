@@ -2,11 +2,11 @@ AGENTLOOM / ARCHITECTURE
 
 # 总体架构、分层与模块职责
 
-架构设计 v0.3 · 2026-10-04 · 基于当前代码核对 · 供后续迭代评审
+架构设计 v0.3 · 2026-10-07 · 基于当前代码核对 · 供后续迭代评审
 
 采用模块化单体：一个 Vue 工作台、一个 Python 服务、一个 PostgreSQL 数据库。内部明确管理配置、任务运行、能力执行和持久化边界，再按实际规模拆分部署。
 
-> **文档口径：** “现有”表示已在代码中找到；“目标 / 建议”表示下一阶段边界，并不代表已经完成重构。本次整理架构与目录规划，不调整运行行为或数据库。
+> **文档口径：** “现有”表示已在代码中找到；“目标 / 建议”表示下一阶段边界。2026-10-07 已补齐模型网关、压缩/完成/执行策略注入，以及工具上下文和观察通知隔离，见[Runtime 模块化实现 v0.1](runtime-modularity-v0.1.md)。统一 HookManager、独立 ContextManager、Token 主动压缩及完整会话历史继承仍待实现；下方架构图继续表达目标分层。
 
 - [总体框架](#overview)
 - [六层职责](#layers)
@@ -79,7 +79,7 @@ AGENTLOOM / ARCHITECTURE
 | 交互层        | 管理表单、配置编辑、运行对话、事件显示、引用及产物下载。                         | 通过 HTTP/SSE 调用平台。                     | `apps/web/src`；运行页已拆分，资源管理仍集中在 App.vue，建议按功能拆页。                  |
 | API 接入层    | 解析请求、识别身份、校验输入、转换 HTTP 错误、提供事件流。                       | 调用应用服务，返回稳定 API 契约。            | `routes/`、schema.py、dependencies.py；将路由中的业务事务和 SQL 下移。                    |
 | 应用服务层    | 完成保存草稿、发布、导入资源、创建/恢复/取消运行等完整用例；管理事务和业务约束。 | 调用仓储及 Runtime 的启动接口。              | `services/` 已有部分实现；补齐资源、发布和完整 RunService。                               |
-| Agent Runtime | 执行已发布配置：推理、行动、观察、继续、完成或等待补充。                         | 依赖模型、工具调用、检查点、事件写入等接口。 | `packages/runtime`；继续隔离 provider 和解密细节。                                        |
+| Agent Runtime | 执行已发布配置：推理、行动、观察、继续、完成或等待补充。                         | 依赖模型、工具调用、检查点、事件写入等接口。 | `packages/runtime`；Engine 通过注入网关调用模型，provider 和模型解密已移至适配器。                                        |
 | 能力执行层    | 路由工具请求、过滤工具目录、校验权限与参数、治理执行、返回统一结果。             | 处理器调用具体适配器。                       | event_bus.py、tool_runtime.py、handlers/ 已落地。                                         |
 | 基础设施层    | 数据库、文件、网络协议、容器、密钥与索引的具体实现。                             | 实现上层声明的接口，由组装入口注入。         | database.py、store.py、assets.py、provider.py、mcp_tools.py、sandbox.py；仍待按接口收敛。 |
 
@@ -111,16 +111,16 @@ AGENTLOOM / ARCHITECTURE
 
 | 模块              | 单一职责                                                                                   | 现有实现 / 下一步                                                                                               |
 | ----------------- | ------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------- |
-| RuntimeFactory    | 接收发布快照及依赖接口，组装 Loop、注册表、总线和处理器。                                  | `runtime.create_engine()` 已有；后续使用类型化 RuntimeSpec。                                                    |
+| RuntimeFactory    | 接收发布快照及依赖接口，组装 Loop、注册表、总线和处理器。                                  | `create_engine()` 注入 RuntimeModules、工具注册表和运行预算；完整 RuntimeSpec 仍待类型化。                                                    |
 | Loop / Engine     | 区分模型回答和 tool_calls，维护轮次与 pending 调用，将工具结果回填对话，决定下一轮或结束。 | `engine.py`；已经去掉具体工具执行分支。                                                                         |
 | HookManager       | 在明确生命周期节点按顺序调用扩展；管理允许的修改、拦截、超时、异常与恢复语义。             | **目标模块，尚未实现。** 现有 EventBus.subscribe 是观察通知，尚不具备完整可等待、可修改、可拦截的 Hooks 契约。  |
-| ModelGateway      | 统一模型请求与响应、凭据解析、限流和用量记录，对接不同供应商适配器。                       | 目标接口。当前 Engine 仍直接调用 `provider.chat` 并持有 decrypt 回调；provider 已实现协议校验和有限重试。       |
-| ContextManager    | 管理实例内跨 Loop 上下文、会话历史继承、Token 预算与来源；按配置主动压缩完整交互组。 | `context.py` 已有字符阈值压缩；完整历史继承及可配置 Token / 轮次策略仍为目标，见[主动压缩设计](context-management-design-v0.1.md#budget)。 |
-| PlanManager       | 保存和调整计划及步骤状态；Plan 要求先计划再自动执行。                                      | `planning.py` 和 planning handler；ReAct/Plan 共用 Loop。                                                       |
-| CompletionPolicy  | 依据目标、执行证据与未完成计划判断 complete / continue / blocked。                         | `completion.py`；当前同一模型做完成检查，不能替代真实工具验证。                                                 |
-| ChildTaskManager  | 创建、恢复、收集子任务；继承主模型，维护子任务上下文、资源范围与预算。                     | 当前由 delegation handler + Engine.loop 实现；后续抽成明确接口。子 Agent 不配置独立模式，内部可以维护任务步骤。 |
-| CheckpointManager | 记录对话、计划、调用边界、子实例和恢复信息；未知执行结果先核对，避免自动重放。             | Engine.persist + API 注入 save 已有；后续收敛为 CheckpointStore 接口及版本迁移规则。                            |
-| ExecutionPolicy   | 统一运行时限、模型调用预算、最大轮次、委派数和恢复策略。                                   | 当前常量分散在 Engine、RunService、ToolDefinition 中；建议集中成策略对象。                                      |
+| ModelGateway      | 统一模型请求与响应、凭据解析、限流和用量记录，对接不同供应商适配器。                       | `ModelGateway` Protocol 与 `ProviderModelGateway` 已实现；Engine 不再导入 provider 或持有模型解密回调。统一限流、完整用量及 Hooks 待补齐。       |
+| ContextManager    | 管理实例内跨 Loop 上下文、会话历史继承、Token 预算与来源；按配置主动压缩完整交互组。 | `CharacterCompactionPolicy` 已可替换注入；独立 ContextManager、完整历史继承及 Token / 轮次策略仍为目标，见[主动压缩设计](context-management-design-v0.1.md#budget)。 |
+| PlanManager       | 保存和调整计划及步骤状态；Plan 要求先计划再自动执行。                                      | `planning.py` 校验计划，handler 通过受限 PlanEditor 更新；format=1 状态仍由宿主适配器持有。                                                       |
+| CompletionPolicy  | 依据目标、执行证据与未完成计划判断 complete / continue / blocked。                         | `CompletionPolicy` Protocol 与默认 `EvidenceCompletionPolicy` 已可注入；默认仍调用同一模型检查，不能替代真实工具验证。                                                 |
+| ChildTaskManager  | 创建、恢复、收集子任务；继承主模型，维护子任务上下文、资源范围与预算。                     | handler 通过 ChildRunner 接口调用 `execution_services` 宿主适配器，再复用 Engine.loop；尚非独立子任务状态模块。子 Agent 不配置独立模式。 |
+| CheckpointManager | 记录对话、计划、调用边界、子实例和恢复信息；未知执行结果先核对，避免自动重放。             | Engine.persist + API save 已有；检查点记录模块 ID/配置、模型身份及工具版本目录并校验恢复兼容，仍使用 format=1，CheckpointStore 与显式迁移待补。                            |
+| ExecutionPolicy   | 统一运行时限、模型调用预算、最大轮次、委派数和恢复策略。                                   | `ExecutionLimits` 已注入模型调用数与循环上限；`ExecutionStrategy` 可替换 ReAct/Plan 行为，超时/委派/恢复策略仍待收敛。                                      |
 
 **Loop 仍负责流程判断：** 调用模型、处理 tool_calls、等待结果、继续执行、判断完成。这些是循环本身的职责。具体工具的协议、文件操作和服务地址由下面的能力层处理。
 
@@ -202,7 +202,7 @@ Handler：使用具体能力
 | KnowledgeHandler         | 根据当前实例绑定检索 Wiki，并维护回答引用。                                      | 通过 Retriever 接口检索；上传、建索引由管理流程负责。                  |
 | Plan / DelegateHandler   | 将模型更新计划或委派子任务的请求转交 PlanManager / ChildTaskManager。            | 经注入接口调用 Runtime，避免直接导入和操作整个 Engine。                |
 
-当前 ToolContext 包含可变 frame/state 和运行回调，适合同进程的第一版。目标是缩小为 Workspace、ResourceScope、PlanEditor、ChildTaskRunner 等所需接口，减少任意处理器修改整个运行状态的机会。
+当前 ToolContext 已移除公开的 frame/state 和通用运行回调，只提供深只读 config、实例/工作区、观察出口，以及 plan、children、citations、invocation 受限接口。`execution_services.py` 将这些能力适配到现有 format=1 检查点；宿主内部仍持有 frame/state，状态与子任务尚未彻底独立。观察者只接收 JSON 深冻结快照，不获得 ToolContext。工具注册表在 ToolRuntime 组装时冻结；模型、策略和注册表的替换方式见[模块化实现](runtime-modularity-v0.1.md)。
 
 <a id="events"></a>
 
@@ -226,13 +226,13 @@ Handler：使用具体能力
 | ----------------------------------- | ------------------------------------------------------------------------ | --------------------------------------------------------- |
 | AgentConfig / ChildConfig           | 主配置、资源绑定、子任务模板；子配置不含 model/mode。                    | Pydantic / 前端类型已有，尚未统一生成全部共享类型。       |
 | RuntimeSpec                         | 已解析发布版本、模型与资源修订、子配置、执行策略。                       | 当前为 snapshot 字典，目标改为类型化对象。                |
-| ExecutionContext                    | 平台注入的 space/user/run/instance、工作区、授权范围、取消与存储接口。   | 现有 ToolContext 已与模型参数分开，仍包含较宽的共享状态。 |
+| ExecutionContext                    | 平台注入的 space/user/run/instance、工作区、授权范围、取消与存储接口。   | ToolContext 已移除公开共享状态，改为受限能力接口和深只读 config；仍为进程内契约。 |
 | ToolRequest / ToolOutcome           | 调用名与参数、调用 ID、结果与状态；后续明确错误码和未知结果语义。        | 已有 dataclass；request_id 由总线 Event 携带。            |
 | HookSpec / HookContext / HookResult | 固定版本的扩展声明、只读阶段上下文、Continue/Patch/Reject 及字段白名单。 | 本轮架构新增；待实现与验证。                              |
 | RunEvent                            | 事件类型、顺序号、run/instance/request/call 关联、必要且脱敏的 payload。 | 数据库顺序号与 SSE 已有；完整类型化事件 schema 待补齐。   |
 | Checkpoint                          | 检查点格式版本、消息、计划、pending 边界、处理器状态和子实例。           | 已有加密保存与旧格式兼容；后续增加显式 schema 迁移。      |
 
-**目标边界：模型调用独立通过 ModelGateway。** Loop 主动请求推理，模型随后选择工具。两类请求可以共享追踪 ID、超时和观测规范，工具总线保持聚焦在能力调用上。
+**已落地边界：模型调用独立通过 ModelGateway。** Loop 主动请求推理，模型随后选择工具。两类请求可以共享追踪 ID、超时和观测规范，工具总线保持聚焦在能力调用上。
 
 <a id="flows"></a>
 
@@ -347,7 +347,7 @@ API 应用依赖 Runtime 公共入口；Runtime 不反向导入 API。模型、R
 | 顺序                       | 实现内容                                                                                                        | 可验证的完成条件                                                                                                                |
 | -------------------------- | --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
 | 1 · 收拢业务入口           | 抽完整 RunService / ReleaseService；路由只处理请求响应；按领域补仓储接口。                                      | 网页与 API 共用发布/运行规则；路由不直接创建任务或写发布 SQL。                                                                  |
-| 2 · 收敛 Runtime 依赖      | 注入 ModelGateway、CheckpointStore、EventSink、ExecutionPolicy，新增 HookManager 和阶段契约，缩小 ToolContext。 | Runtime 可在无 FastAPI/真实数据库环境测试；换模型适配器或添加工具无需修改 Loop；Hook 修改经过重校验，取消与恢复不重复外部动作。 |
+| 2 · 收敛 Runtime 依赖      | 已有 ModelGateway、策略注入及受限 ToolContext；继续补 CheckpointStore、EventSink、统一 HookManager 与独立状态模块。 | Runtime 可在无 FastAPI/真实数据库环境测试；换模型适配器或添加工具无需修改 Loop；Hook 修改经过重校验，取消与恢复不重复外部动作。 |
 | 3 · 明确资源版本           | Skill 包修订、MCP 注册修订、Wiki 索引修订、统一凭据引用。                                                       | 发布后改资源的影响符合明确规则；旧版本与恢复均可解释、可追踪。                                                                  |
 | 4 · 分离知识流程与前端页面 | 入库/索引与检索拆分；管理台按资源和任务功能拆页。                                                               | 上传不进入 Loop；检索仅访问实例绑定修订；App.vue 回到页面壳职责。                                                               |
 | 5 · 同进程运行可靠性       | 将同步数据库调用收口到异步或线程适配；明确事件落库、背压和恢复策略。                                            | 远程数据库变慢不阻塞所有执行；取消、超时、断线和恢复有可重复验证。                                                              |
@@ -363,8 +363,8 @@ API 应用依赖 Runtime 公共入口；Runtime 不反向导入 API。模型、R
 ## 11. 当前代码阅读顺序
 
 1. `apps/api/agentloom/routes/runs.py` → `services/runs.py`：一次任务的创建、组装与结束。
-2. `packages/runtime/agentloom_runtime/runtime.py` → `engine.py`：运行时组装及核心循环。
-3. `event_bus.py` → `tool_runtime.py` → `handlers/`：工具请求如何到达执行实现。
+2. `packages/runtime/agentloom_runtime/runtime.py` → `module_contracts.py` / `modules.py` → `engine.py`：模块组装、注入契约及核心循环。
+3. `event_bus.py` → `tool_runtime.py` → `handlers/` / `execution_services.py`：工具请求、受限能力与宿主状态适配。
 4. `services/agents.py`、`knowledge.py`、`store.py`：当前发布、知识和持久化边界。
 
 相关资料：[需求文档](requirements-v0.2.md) · [事件总线实现说明](runtime-event-bus.md) · [目录职责规划](directory-plan.md) · [项目 README](../README.md)

@@ -2,11 +2,13 @@
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
+
+from .observation import ObservationScalar, freeze_observation, snapshot_metadata
 
 logger = logging.getLogger(__name__)
 _ACTIVE_BUSES: ContextVar[tuple[int, ...]] = ContextVar("event_bus_execution", default=())
@@ -33,6 +35,7 @@ class _Pending:
     future: asyncio.Future
     task: asyncio.Task
     finished: asyncio.Future
+    topic: str
 
 
 class EventBus:
@@ -57,12 +60,27 @@ class EventBus:
     def pending_count(self) -> int:
         return len(self._pending)
 
-    def register(self, topic: str, async_handler: Handler) -> None:
+    def register(self, topic: str, async_handler: Handler) -> Callable[[], None]:
+        """Register one owner; its release handle is valid only after requests drain."""
         if self._closed:
             raise RuntimeError("Event bus is closed")
         if topic in self._handlers:
             raise ValueError(f"Request handler already registered for topic: {topic}")
-        self._handlers[topic] = async_handler
+
+        # A distinct identity also protects later registrations of the same callable.
+        async def registration(event: Event):
+            return await async_handler(event)
+
+        self._handlers[topic] = registration
+
+        def unregister():
+            if self._handlers.get(topic) is not registration:
+                return
+            if any(request.topic == topic for request in self._pending.values()):
+                raise RuntimeError(f"Cannot unregister topic with active requests: {topic}")
+            del self._handlers[topic]
+
+        return unregister
 
     def subscribe(self, topic: str, async_observer: Observer) -> Callable[[], None]:
         if self._closed:
@@ -89,11 +107,23 @@ class EventBus:
         context: Any = None,
         correlation_id: str | None = None,
     ) -> None:
-        event = Event(topic, correlation_id or uuid4().hex, payload, context)
+        """Observe immutable JSON snapshots; arbitrary objects are rejected.
+
+        Execution context belongs only to request handlers. Callers publishing
+        observations must supply JSON-shaped context data explicitly.
+        """
+        payload = freeze_observation(payload)
+        context = freeze_observation(context)
+        correlation_id = correlation_id or uuid4().hex
         observers = [*self._observers.get(topic, [])]
         if topic != "*":
             observers.extend(self._observers.get("*", []))
-        tasks = [asyncio.create_task(self._observe(observer, event)) for observer in observers]
+        tasks = [
+            asyncio.create_task(
+                self._observe(observer, Event(topic, correlation_id, payload, context))
+            )
+            for observer in observers
+        ]
         if not tasks:
             return
         try:
@@ -127,6 +157,7 @@ class EventBus:
         context: Any = None,
         correlation_id: str | None = None,
         timeout: float | None = 90,
+        observation_metadata: Mapping[str, ObservationScalar] | None = None,
     ) -> Any:
         if self._closed:
             raise RuntimeError("Event bus is closed")
@@ -136,10 +167,12 @@ class EventBus:
         correlation_id = correlation_id or uuid4().hex
         if correlation_id in self._pending:
             raise ValueError(f"Request correlation ID already active: {correlation_id}")
+        metadata = snapshot_metadata(observation_metadata)
+        metadata["request_id"] = correlation_id
         event = Event(topic, correlation_id, payload, context)
         future = asyncio.get_running_loop().create_future()
-        task = asyncio.create_task(self._dispatch(event, handler, future))
-        pending = _Pending(future, task, asyncio.get_running_loop().create_future())
+        task = asyncio.create_task(self._dispatch(event, handler, future, metadata))
+        pending = _Pending(future, task, asyncio.get_running_loop().create_future(), topic)
         self._pending[correlation_id] = pending
         outcome = "completed"
         deadline = asyncio.timeout(timeout)
@@ -166,16 +199,18 @@ class EventBus:
                 elif not future.cancelled():
                     # Consume an exception if cancellation/deadline won the reply race.
                     future.exception()
-                await self._notify(event, outcome)
+                await self._notify(event, outcome, metadata)
             finally:
                 self._pending.pop(correlation_id, None)
                 pending.finished.set_result(None)
 
-    async def _dispatch(self, event: Event, handler: Handler, future: asyncio.Future) -> None:
+    async def _dispatch(
+        self, event: Event, handler: Handler, future: asyncio.Future, metadata: dict
+    ) -> None:
         token = _ACTIVE_BUSES.set((*_ACTIVE_BUSES.get(), id(self)))
         try:
             try:
-                await self._notify(event, "started")
+                await self._notify(event, "started", metadata)
                 result = await handler(event)
             except asyncio.CancelledError:
                 future.cancel()
@@ -189,11 +224,11 @@ class EventBus:
         finally:
             _ACTIVE_BUSES.reset(token)
 
-    async def _notify(self, event: Event, outcome: str) -> None:
+    async def _notify(self, event: Event, outcome: str, metadata: dict) -> None:
         await self.publish(
             f"request.{outcome}",
             {"topic": event.topic},
-            context=event.context,
+            context=metadata,
             correlation_id=event.correlation_id,
         )
 
@@ -201,7 +236,23 @@ class EventBus:
         if id(self) in _ACTIVE_BUSES.get():
             raise RuntimeError("Cannot close event bus from its handler or observer")
         self._closed = True
-        pending = list(self._pending.values())
+        await self._cancel_requests(list(self._pending.values()))
+
+    async def cancel_topic(self, topic: str) -> None:
+        """Cancel admitted requests for one owner, including notification cleanup.
+
+        This does not close the bus or prevent new requests. The owner must first
+        stop accepting work, then cancel and release its registration; release
+        still refuses if another request arrived during cleanup.
+        """
+        if id(self) in _ACTIVE_BUSES.get():
+            raise RuntimeError("Cannot cancel a topic from its bus handler or observer")
+        await self._cancel_requests(
+            [request for request in self._pending.values() if request.topic == topic]
+        )
+
+    @staticmethod
+    async def _cancel_requests(pending: list[_Pending]) -> None:
         for request in pending:
             if not request.task.cancelling():
                 request.task.cancel()
