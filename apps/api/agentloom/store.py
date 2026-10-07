@@ -134,11 +134,59 @@ def transition(run, status, kind, payload, output="", error=None):
 
 def finalize(run, status, kind, payload, output="", error=None):
     """Retry only terminal-state persistence, safely even after an unknown commit."""
-    with transaction("run:" + run) as c:
+    record = query("SELECT session_id FROM runs WHERE id=?", (run,), True)
+    if not record:
+        return
+    sid = record["session_id"] or run
+    with transaction("session:" + sid) as c:
+        lock(c, "run:" + run)
         row = c.execute("SELECT status FROM runs WHERE id=?", (run,)).fetchone()
         if not row or row["status"] not in ("queued", "running"):
             return
         c.execute(
             "UPDATE runs SET status=?,output=?,error=? WHERE id=?", (status, output, error, run)
         )
-        _insert_event(c, run, kind, payload)
+        seq = _insert_event(c, run, kind, payload)
+        append_session_message(
+            c,
+            sid,
+            run,
+            "main",
+            f"terminal-{seq}",
+            "status",
+            {
+                "role": "user",
+                "content": "历史任务结果（执行状态资料）：\n"
+                + json.dumps(
+                    {"status": status, "output": output, "error": error}, ensure_ascii=False
+                ),
+            },
+        )
+
+
+def append_session_message(connection, sid, rid, instance, key, kind, message):
+    from .security import encrypt
+
+    existing = connection.execute(
+        "SELECT seq FROM session_messages WHERE run_id=? AND instance=? AND entry_key=?",
+        (rid, instance, key),
+    ).fetchone()
+    if existing:
+        return existing["seq"]
+    seq = connection.execute(
+        "SELECT COALESCE(MAX(seq),0)+1 FROM session_messages WHERE session_id=?", (sid,)
+    ).fetchone()[0]
+    connection.execute(
+        "INSERT INTO session_messages VALUES(?,?,?,?,?,?,?,?)",
+        (
+            sid,
+            seq,
+            rid,
+            instance,
+            key,
+            kind,
+            encrypt(json.dumps(message, ensure_ascii=False)),
+            time.time(),
+        ),
+    )
+    return seq

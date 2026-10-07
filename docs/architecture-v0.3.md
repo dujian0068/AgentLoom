@@ -6,7 +6,7 @@ AGENTLOOM / ARCHITECTURE
 
 采用模块化单体：一个 Vue 工作台、一个 Python 服务、一个 PostgreSQL 数据库。内部明确管理配置、任务运行、能力执行和持久化边界，再按实际规模拆分部署。
 
-> **文档口径：** “现有”表示已在代码中找到；“目标 / 建议”表示下一阶段边界。2026-10-07 已补齐模型网关、压缩/完成/执行策略注入，以及工具上下文和观察通知隔离，见[Runtime 模块化实现 v0.1](runtime-modularity-v0.1.md)。统一 HookManager、独立 ContextManager、Token 主动压缩及完整会话历史继承仍待实现；下方架构图继续表达目标分层。
+> **文档口径：** “现有”表示已在代码中找到；“目标 / 建议”表示下一阶段边界。模块化接口见[Runtime 模块化实现 v0.1](runtime-modularity-v0.1.md)。后续已增加可注入 ContextManager、连续会话来源和可复用视图、80% / 轮数主动压缩及模型发现，见[上下文实现 v0.2](runtime-context-v0.2.md)。Token 数为保守估计，完整类型化来源、Memory 与统一 HookManager 仍待实现；下方图继续表达目标分层。
 
 - [总体框架](#overview)
 - [六层职责](#layers)
@@ -115,7 +115,7 @@ AGENTLOOM / ARCHITECTURE
 | Loop / Engine     | 区分模型回答和 tool_calls，维护轮次与 pending 调用，将工具结果回填对话，决定下一轮或结束。 | `engine.py`；已经去掉具体工具执行分支。                                                                         |
 | HookManager       | 在明确生命周期节点按顺序调用扩展；管理允许的修改、拦截、超时、异常与恢复语义。             | **目标模块，尚未实现。** 现有 EventBus.subscribe 是观察通知，尚不具备完整可等待、可修改、可拦截的 Hooks 契约。  |
 | ModelGateway      | 统一模型请求与响应、凭据解析、限流和用量记录，对接不同供应商适配器。                       | `ModelGateway` Protocol 与 `ProviderModelGateway` 已实现；Engine 不再导入 provider 或持有模型解密回调。统一限流、完整用量及 Hooks 待补齐。       |
-| ContextManager    | 管理实例内跨 Loop 上下文、会话历史继承、Token 预算与来源；按配置主动压缩完整交互组。 | `CharacterCompactionPolicy` 已可替换注入；独立 ContextManager、完整历史继承及 Token / 轮次策略仍为目标，见[主动压缩设计](context-management-design-v0.1.md#budget)。 |
+| ContextManager    | 管理实例内跨 Loop 上下文、会话历史继承、Token 预算与来源；按配置主动压缩完整交互组。 | `JournalContextManager`、预算策略与连续会话来源 / 视图已落地；新发布配置采用 80% / 轮数触发，旧无策略版本保留字符策略。见[当前实现](runtime-context-v0.2.md)。 |
 | PlanManager       | 保存和调整计划及步骤状态；Plan 要求先计划再自动执行。                                      | `planning.py` 校验计划，handler 通过受限 PlanEditor 更新；format=1 状态仍由宿主适配器持有。                                                       |
 | CompletionPolicy  | 依据目标、执行证据与未完成计划判断 complete / continue / blocked。                         | `CompletionPolicy` Protocol 与默认 `EvidenceCompletionPolicy` 已可注入；默认仍调用同一模型检查，不能替代真实工具验证。                                                 |
 | ChildTaskManager  | 创建、恢复、收集子任务；继承主模型，维护子任务上下文、资源范围与预算。                     | handler 通过 ChildRunner 接口调用 `execution_services` 宿主适配器，再复用 Engine.loop；尚非独立子任务状态模块。子 Agent 不配置独立模式。 |
@@ -124,11 +124,11 @@ AGENTLOOM / ARCHITECTURE
 
 **Loop 仍负责流程判断：** 调用模型、处理 tool_calls、等待结果、继续执行、判断完成。这些是循环本身的职责。具体工具的协议、文件操作和服务地址由下面的能力层处理。
 
-**上下文主动压缩（目标）：** ContextManager 内的 BudgetPolicy 计算完整请求的 Token 占用与有效输入预算，CompactionPolicy 判断可配置触发条件并压缩已完成交互组；Loop 只在模型调用边界请求准备上下文。默认在 `EstimatedInput / InputBudget >= 0.80` 时触发，`InputBudget` 已扣除输出预留及安全余量并受独立输入上限约束。也可配置 `user_turns`、`model_steps` 正整数阈值（默认 `null` 禁用），任一启用条件满足即可在下一安全边界触发；压缩后目标占用比例建议默认 `0.60`，启用占用比例触发时须低于触发比例。
+**上下文主动压缩（已实现基础版）：** 预算策略按 UTF-8 JSON 字节与封装余量保守估算完整请求大小，CompactionPolicy 判断可配置条件并压缩已完成交互组。默认在 `EstimatedInput / InputBudget >= 0.80` 时触发，`InputBudget` 扣除输出预留及安全余量；也支持 `user_turns`、`model_steps` 正整数阈值（默认 `null` 禁用），任一条件满足即可在安全边界触发。默认目标比例 `0.60`，须低于触发比例；成功提交须实际减量并低于触发阈值，是否达到目标另记录。供应商精确 Token 计数和独立输入上限仍待补齐。
 
 `user_turns` 每个新提问 / 新 Run 计一次，补充、恢复与重试不另计；`model_steps` 只计有效持久化的 `action` 模型响应，压缩、完成检查及子实例响应不增加父计数。基线取最近成功压缩时的观测水位，通过历史快照和检查点继承、恢复，不能按新 Run 或恢复重置，也不能用可重置的 ExecutionPolicy 调用预算替代。子实例计数独立；压缩仅覆盖完整已完成组并保留当前任务及有效约束，无可压缩组则延后，失败不推进基线。
 
-管理端负责平台默认值和 Agent 高级配置，ReleaseService 冻结最终 ContextPolicy；ContextManager 执行策略，ModelGateway 在 Hook 后强制校验硬预算。关闭某项主动触发条件不能绕过模型上限。上述配置与策略尚未实现，详细契约见[上下文管理：Token 预算与主动压缩](context-management-design-v0.1.md#budget)。
+管理端已提供 Agent 压缩比例 / 轮数配置及模型发现与预算，发布快照冻结有效配置。action、compaction、verification 请求在进入模型网关前校验硬预算；统一 Hook 尚未实现，未来仍须在 Hook 后重检。规则与限制见[上下文实现 v0.2](runtime-context-v0.2.md)，完整目标契约见[主动压缩设计](context-management-design-v0.1.md#budget)。
 
 <a id="hooks"></a>
 
@@ -253,7 +253,7 @@ Handler：使用具体能力
 
 新 Run 在首次模型调用前，继承同会话此前全部已提交且当前授权可见的历史：用户提问与回答、各 Loop 的模型消息、工具调用参数和结果、MCP 交互、Skill 加载内容及资源引用、知识与文件资料、错误和状态记录；失败、取消 Run 中已经发生的记录也在范围内。继承不限定为最近 6 个成功 Run 或最终问答。历史可压缩，大内容可按引用读取，但必须保留完整来源与可追溯关系，不能以最终回答摘要替代全部交互历史。旧 pending 调用、取消标记、单次 Run 的执行预算计数和其他可变执行状态仅作为历史事实，不恢复到新 Run 执行；压缩触发计数及基线属于会话上下文元数据，随历史快照继承。
 
-同会话新提问默认串行；存在活动 Run 时沿用当前拒绝策略，本次不新增新提问排队。运行中补充队列仍为目标设计，其输入归属原 Run。历史 Skill 加载不新增工具权限，凭据不进入上下文；子实例内部上下文仍隔离，仅显式导出的结果、证据与引用可进入父实例和会话历史。详细边界见[上下文管理：会话、执行线程与历史继承](context-management-design-v0.1.md#scope)。本节是已确认目标，不代表当前已实现完整历史继承。
+同会话新提问默认串行；活动 Run 期间的新提问仍被拒绝。恢复补充队列已实现，运行中直接补充入口仍为目标。历史 Skill 加载不新增工具权限；子来源单独保存，父上下文只继承主记录和委派结果。当前已实现连续主记录继承、原 Run 恢复隔离和合规前缀视图；类型化资源版本与授权投影仍待补齐。详见[当前实现](runtime-context-v0.2.md)及[作用域目标](context-management-design-v0.1.md#scope)。
 
 ### 一次运行
 
@@ -289,7 +289,7 @@ Handler：使用具体能力
 
 **历史继承目标：** 会话历史保存各 Run 已提交的交互来源及顺序、所属实例、内容或不可变引用，供新 Run 按当前授权重建；Checkpoint 用于恢复原 Run 的可变执行状态。两者不能以复制旧检查点代替历史继承，来源记录和摘要的关系详见[作用域设计](context-management-design-v0.1.md#scope)。
 
-**当前存储：** PostgreSQL 保存账号、配置、发布、会话、运行、事件、加密检查点以及知识原文/分块/向量文本；本地文件保存 Skill 和工具包、运行工作区、产物及加密根密钥。PostgreSQL 关键词检索使用 GIN，当前向量相似度由 Python 计算。
+**当前存储：** PostgreSQL 保存账号、配置、发布、会话、运行、事件、加密检查点、加密会话来源 / 可复用视图以及知识原文/分块/向量文本；本地文件保存 Skill 和工具包、运行工作区、产物及加密根密钥。PostgreSQL 关键词检索使用 GIN，当前向量相似度由 Python 计算。
 
 ### 发布一致性：需要明确收敛的规则
 

@@ -6,7 +6,7 @@ AGENTLOOM / RUNTIME DESIGN
 
 **ContextManager 决定每次模型调用看到什么，并保证这些信息在预算内、来源可追溯、主子任务相互隔离、运行中断后可恢复。** 它属于 Agent Runtime，与 Loop、HookManager、计划管理和检查点协作。
 
-> **实现状态：** 当前已有消息组装、可注入的 `CompactionPolicy` / `CharacterCompactionPolicy`、`CompletionPolicy`、ModelGateway 和实例检查点，见[Runtime 模块化实现 v0.1](runtime-modularity-v0.1.md)。默认仍按字符压缩；本文的独立 ContextManager、类型化来源记录、Token 预算器、80% / 轮数主动压缩、完整会话历史继承、Memory 与版本化视图仍未实现。下文目标接口不能当作已可导入的 SDK；第 12 节单列当前代码边界。
+> **实现状态：** 已有可注入 ContextManager、连续会话来源记录、独立模型可见视图、默认 80% / 轮数主动压缩与可恢复基线，实际接口及限制见[上下文实现 v0.2](runtime-context-v0.2.md)。Token 数目前为 UTF-8 字节保守估算；旧无策略发布版本仍用字符压缩。本文的完整类型化来源、CAS、资源修订、Memory 与 Hooks 仍是目标；下文示意接口不能当作已可导入的 SDK，第 12 节单列当前边界。
 
 **已确认的会话语义：** 一次新提问创建独立 Run 与主执行线程；该请求的多次 Loop 共用该线程上下文。同一会话的下一次新提问继承此前完整的、已授权的交互历史，包括问答、模型消息、工具调用参数与结果、MCP、Skill 加载内容及资源引用。继承范围不限制为成功任务或最终问答；中断恢复与用户补充继续原 Run/线程。详见[第 8 节](#scope)。
 
@@ -489,24 +489,24 @@ packages/runtime/agentloom_runtime/context/  # 目标；从现有 context.py 渐
 
 ## 12. 当前实现与目标差距
 
-下表于 2026-10-07 按模块化代码核对；这里只更新实现状态，目标设计的全部验收尚未完成。已可运行的注入方式与验证范围见[模块化实现记录](runtime-modularity-v0.1.md)。
+下表于 2026-10-07 按上下文迭代代码核对；目标设计的全部验收尚未完成。实际接口、兼容规则和已观察前缀示例见[上下文实现 v0.2](runtime-context-v0.2.md)。
 
 | 能力         | 现有实现                                                                                                                                                                                               | 需要补齐                                                                              |
 | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------- |
-| 初始组装     | [engine.py](../packages/runtime/agentloom_runtime/engine.py) 的 prompt / loop：Agent Prompt + Loop 规则 + Skill/子 Agent 目录 + 历史 + 当前任务。                                                      | 独立 Assembler、类型化来源、分区与调用目的策略。                                      |
-| 会话历史     | [routes/runs.py](../apps/api/agentloom/routes/runs.py) 新 Run 读取同会话最近 6 个成功 Run 的用户输入与最终输出。                                                                                       | 新提问独立线程、完整历史快照继承；目前缺少旧工具/MCP/Skill 过程，恢复补充原文也未完整进入后续新 Run 历史。                      |
-| 压缩与预算   | [context.py](../packages/runtime/agentloom_runtime/context.py) 的 `CharacterCompactionPolicy` 可注入并返回候选消息，由 Engine 提交；默认 messages JSON 超过 60,000 字符触发，近期目标 16,000、摘要截至 6,000 字符。                                                | Token 预算与分项计费、可配置 80% / 轮数主动触发、持久计数基线、分段压缩、重检与来源链；配置 UI 尚未实现。 |
-| 工具完整性   | 正常 Loop 先完成 pending tools，再选 user/assistant 边界压缩；压缩候选提交前校验首条系统消息及工具调用/结果完整性。                                                                                                                   | 显式 MessageGroup 校验、异常历史校验、持久记录与可见投影分离。                        |
-| 大结果       | engine.py 截前 24,000 字符；evidence 只保留最近 20 条，每条前 3,000 字符。                                                                                                                             | 统一内容引用与分页读取。当前提示“按文件继续读”不代表通用分段读取已可用。              |
+| 初始组装     | `ContextManager` Protocol 与 `JournalContextManager` 已注入，管理来源、模型视图、补充队列和压缩快照；状态仍存于 format=1 frame。 | 独立 Assembler、类型化来源、分区与调用目的策略。 |
+| 会话历史     | 加密 `session_messages` 连续保存已提交的输入、补充、模型、工具和状态；新 Run 使用合规 `session_views` 加后续主记录，不再限制最近 6 个成功任务。 | 精确来源块、资源撤权后的视图失效、大内容引用；旧已丢失内容无法补回。 |
+| 压缩与预算   | `BudgetCompactionPolicy` 支持默认 80%、60% 目标、轮数 / 步骤 OR、持久成功基线与分段摘要；UI 配置随发布冻结。当前采用 UTF-8 字节保守估算，旧无策略版本保留字符算法。 | 供应商精确 tokenizer / usage、独立输入上限、持久失败尝试与增长退避门槛。 |
+| 工具完整性   | pending 处理后才压缩；整组配对校验；历史缺结果投影为 unknown，迟到结果保留为资料；历史不会自动执行。 | 完整类型化 MessageGroup 与操作事实引用。 |
+| 大结果       | 宿主接收的完整工具返回进入来源，模型视图仍截前 24,000 字符；来源 API 可分页查询记录。 | 通用大内容外置、片段分页与模型授权回读；记录分页不等于大字段分页。 |
 | Skill        | [tool_runtime.py](../packages/runtime/agentloom_runtime/tool_runtime.py) 提供目录；[handlers/skills.py](../packages/runtime/agentloom_runtime/handlers/skills.py) 按需加载，附件读取截前 20,000 字符。 | 激活状态、固定内容版本、压缩后的指令保留与回读闭环。                                  |
 | RAG / Memory | [handlers/knowledge.py](../packages/runtime/agentloom_runtime/handlers/knowledge.py) 通过工具检索，引用元数据在整个 Run 的 citations 集合。未发现长期记忆实现。                                        | 实例级引用集合、带权限的投影、版本与失效处理；Memory 后续独立设计。                   |
-| 子任务       | [handlers/delegation.py](../packages/runtime/agentloom_runtime/handlers/delegation.py) 经 ChildRunner 调用 [execution_services.py](../packages/runtime/agentloom_runtime/execution_services.py) 的宿主适配器；子 frame/history 及模型继承行为不变，返回 status/output。                                        | 类型化背景转交与结构化证据/引用导出。                                                 |
-| 完成检查     | [completion.py](../packages/runtime/agentloom_runtime/completion.py) 的 `EvidenceCompletionPolicy` 可注入；接收工作副本并返回 CompletionDecision，默认仍截取证据/消息，purpose=verification。                                                                     | 统一计费与明确目的映射；继续依赖真实状态而非摘要自述。                                |
-| 恢复         | [services/runs.py](../apps/api/agentloom/services/runs.py) 加密保存 format=1 Engine state；恢复校验模块绑定/配置并沿用原实例及发布快照。补充在 pending 组闭合后进入对话。                                                    | 源记录水位、摘要修订、CAS 提交、调用最终输入引用、幂等追加与 Hook 阶段恢复。          |
+| 子任务       | 子 frame 与来源独立，模型 / 策略继承；主上下文只收到委派结果，不展开全部子模型消息。 | 类型化背景转交与结构化证据 / 引用导出。 |
+| 完成检查     | `EvidenceCompletionPolicy` 保留现有证据裁剪，purpose=verification；实际请求同样过硬预算，超限会停止。 | 按目的完整装配；不能通过再删除必要证据来伪造检查成功。 |
+| 恢复         | 加密检查点与来源同步事务保存；原 Run 不混入后来提问；补充排队；模块 / 预算 / 估算器绑定校验；旧数据标记 raw_complete=false。 | 完整 CAS、模型最终调用输入引用、Hook 阶段恢复、显式检查点迁移。 |
 
-`CompactionPolicy` 当前只是可替换的压缩端口：策略接收 task、plan、messages、instance 的工作副本，通过受控 ModelCall 请求模型，返回 `CompactionResult | None`；不再要求 `compact(engine, ...)` 读取整个引擎。它尚未承担本文设计的持久来源、水位、预算和摘要版本管理。
+压缩策略接收 task、plan、messages、instance、工具定义和计数副本，返回候选视图；ContextManager 管理快照与成功基线。`covered_seq` 是实例观察水位，表示整份模型视图依据的范围，不是摘要正文对应原文的精确切片列表。会话视图只覆盖已观察的连续前缀，防止恢复旧 Run 时跨过它未读取的后续问题。完整 ContextRecord / PreparedContext 数据模型尚未完成。
 
-[test_harness.py](../tests/test_harness.py) 已有模拟模型测试覆盖压缩触发/目标保留/工具配对、恢复不重跑已完成工具、未知副作用保护、子实例恢复与加密检查点。这些测试不等于本文的完整上下文设计已经实现。
+验证入口：[test_context_manager.py](../tests/test_context_manager.py)、[test_session_history.py](../tests/test_session_history.py)、[test_context_config.py](../tests/test_context_config.py) 以及既有 [test_harness.py](../tests/test_harness.py)。这些使用临时数据库与模型替身，不代表目标文档所有验收或真实环境验证均已完成。
 
 <a id="delivery"></a>
 

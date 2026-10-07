@@ -2,8 +2,10 @@
 
 from copy import deepcopy
 
+from .budget import normalized_profile
 from .completion import EvidenceCompletionPolicy
-from .context import CharacterCompactionPolicy
+from .context import BudgetCompactionPolicy, CharacterCompactionPolicy
+from .context_manager import JournalContextManager
 from .engine import Engine
 from .execution_strategy import PlanStrategy, ReactStrategy
 from .handlers import register_builtins
@@ -29,8 +31,11 @@ def create_engine(
     strategy=None,
     limits=None,
     registry=None,
+    context_manager=None,
 ):
     snapshot = deepcopy(snapshot)
+    if "context_policy" in snapshot["config"]:
+        snapshot["model_obj"].update(normalized_profile(snapshot["model_obj"]))
     if (
         checkpoint is not None
         and "modules" not in checkpoint
@@ -43,7 +48,11 @@ def create_engine(
         else ProviderModelGateway(snapshot["model_obj"], decrypt),
         compaction=compaction_policy
         if compaction_policy is not None
-        else CharacterCompactionPolicy(),
+        else (
+            BudgetCompactionPolicy(snapshot["config"]["context_policy"], snapshot["model_obj"])
+            if "context_policy" in snapshot["config"]
+            else CharacterCompactionPolicy()
+        ),
         completion=completion_policy
         if completion_policy is not None
         else EvidenceCompletionPolicy(),
@@ -51,6 +60,7 @@ def create_engine(
         if strategy is not None
         else (PlanStrategy() if snapshot["config"]["mode"] == "plan" else ReactStrategy()),
         limits=limits if limits is not None else ExecutionLimits(),
+        context=context_manager if context_manager is not None else JournalContextManager(),
     )
     modules.bindings()  # Validate the durable contract before registering handlers.
     if registry is None:

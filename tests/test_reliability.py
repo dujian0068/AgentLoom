@@ -47,6 +47,26 @@ def test_transient_provider_error_retries_and_returns_valid_message(monkeypatch)
     assert len(requests) == 3 and delays == [0, 0]
 
 
+@pytest.mark.parametrize(
+    "vendor,parameter", [("openai", "max_completion_tokens"), ("deepseek", "max_tokens")]
+)
+def test_reserved_output_budget_is_sent_to_provider(monkeypatch, vendor, parameter):
+    requests = []
+
+    def handler(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(
+            200, json={"choices": [{"message": {"role": "assistant", "content": "ok"}}]}
+        )
+
+    transport(monkeypatch, handler)
+    asyncio.run(
+        provider.chat({**MODEL, "provider": vendor, "max_output_tokens": 2048}, [], [], SECRET)
+    )
+    assert requests[0][parameter] == 2048
+    assert ("max_tokens" if vendor == "openai" else "max_completion_tokens") not in requests[0]
+
+
 def test_credentials_error_not_retried_or_exposed(monkeypatch):
     requests = []
 
@@ -190,7 +210,7 @@ def test_legacy_database_migrates_without_data_loss(tmp_path, monkeypatch):
         )
     db.init()
     before = db.query("SELECT * FROM schema_migrations ORDER BY version")
-    assert [row["version"] for row in before] == [1, 2]
+    assert [row["version"] for row in before] == [1, 2, 3]
     assert db.query("SELECT name FROM users WHERE id=?", ("legacy",), True)["name"] == "旧账号"
     db.init()
     assert db.query("SELECT * FROM schema_migrations ORDER BY version") == before

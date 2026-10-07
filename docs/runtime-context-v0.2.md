@@ -1,0 +1,155 @@
+# AgentLoom 上下文与会话记录实现 v0.2
+
+2026-10-07 · 当前代码说明；目标架构另见[上下文管理设计](context-management-design-v0.1.md)。
+
+本轮把消息管理从 Loop 抽到可注入的 ContextManager，保存连续的会话来源记录，并为新发布配置提供默认 80% 的主动压缩。模型页支持填写 Key 后获取可用模型，自动填入可识别的窗口参数。本页描述已经实现的边界；统一 Hooks、Memory、完整资源版本与多进程调度仍待建设。
+
+## 1. 模块边界
+
+| 模块 | 当前职责 | 代码 |
+| ---- | -------- | ---- |
+| ContextManager | 创建、恢复实例上下文；追加原始记录与模型可见消息；排队补充；提交已验证的压缩视图及计数基线。 | [接口](../packages/runtime/agentloom_runtime/module_contracts.py)、[JournalContextManager](../packages/runtime/agentloom_runtime/context_manager.py) |
+| CompactionPolicy | 判断阈值，按完整交互组选择历史，分段生成交接摘要，验证减量和预算。 | [BudgetCompactionPolicy](../packages/runtime/agentloom_runtime/context.py) |
+| TokenEstimator | 估算完整 messages 和 tools 请求大小，可替换为供应商专用估算器。 | [budget.py](../packages/runtime/agentloom_runtime/budget.py) |
+| 会话历史服务 | 追加会话有序记录；在事务内同步检查点和可复用视图；为新 Run 投影历史。 | [session_history.py](../apps/api/agentloom/services/session_history.py) |
+| Loop / Engine | 驱动模型与工具循环，在行动调用前请求准备上下文；通过现有 save 回调提交执行进度。 | [engine.py](../packages/runtime/agentloom_runtime/engine.py) |
+
+`create_engine(..., context_manager=...)` 可替换默认管理器；`compaction_policy=...` 可替换压缩算法。预算策略支持注入 `TokenEstimator`，估算器的 `module_id` 与声明配置进入检查点绑定。ContextManager 不导入 API、数据库或 MCP 客户端；数据库写入仍由应用服务适配。
+
+当前 `ManagedContext` 由 `messages` 和 `state` 两部分组成，仍挂在 format=1 的实例 frame 内。它已经具备独立契约，但还不是目标文档中完整的类型化 ContextRecordStore、PreparedContext 和 CAS 状态仓储。
+
+## 2. 三类数据分开保存
+
+| 数据 | 保存什么 | 压缩时如何处理 |
+| ---- | -------- | -------------- |
+| 实例来源记录 `context.records` | 本 Run/实例实际接收的用户输入、补充、模型消息、工具结果和执行反馈；每条有局部 `seq`、`kind`、`message`。 | 追加保存，不用摘要覆盖。 |
+| 模型可见视图 `frame.messages` | 系统指令、继承历史、当前任务、摘要和近期交互。 | 允许替换为通过校验的压缩结果。 |
+| 执行状态 | 计划、pending 工具、调用边界、候选回答、子实例和终态。 | 继续由执行检查点保存，不从摘要推断工具成功或任务完成。 |
+
+实例的局部 `seq` 与数据库中的会话 `seq` 不是同一编号。数据库 `session_messages` 以 `(session_id, seq)` 排序，以 `(run_id, instance, entry_key)` 去重；同一检查点重复保存不会重复插入来源。主实例和子实例均保存来源，`message` payload 经平台现有加密机制保存，序号、Run、实例、类型和时间等索引字段不加密。
+
+应用服务在同一会话事务内完成来源同步、加密检查点保存和可复用视图保存；运行终态另以幂等状态记录追加。运行时已知凭据会在会话投影与事件写入前脱敏。这不是通用敏感信息识别器，也不表示模型永远不会输出其他敏感内容。
+
+当前工具结果的模型视图仍最多展示前 24,000 字符，但宿主收到的完整工具返回会先进入来源记录。工具内部本就截断的资料不会凭空恢复，例如 Skill 附件读取仍有自身长度限制。大内容的通用对象存储、不可变引用和模型按需回读工具仍未完成。
+
+压缩快照保存在 `context.compactions`，包含 `revision`、`covered_seq`、压缩后 `messages`、继承水位、计数与指标。`covered_seq` 表示该快照观察到的本实例记录水位；它覆盖的是整份模型视图所依据的观察范围，**不是“摘要正文恰好压缩了哪些记录”的精确来源列表**。
+
+## 3. 新提问与恢复采用不同路径
+
+一次新提问创建新的 Run 和主实例，同一提问的多次 Loop 复用此实例。会话绑定用户、Agent 和发布版本；同一会话存在活动 Run 时，新的提问仍被拒绝。
+
+新 Run 从会话的主实例记录继承历史，不再只读最近 6 个成功任务的最终问答。已经提交的失败、取消、恢复补充、模型工具调用参数、工具结果和状态资料都会保留。Skill、MCP、文件和知识检索作为实际工具交互进入历史，历史不会赋予新工具权限。
+
+子实例内部模型消息保存于会话来源记录，可按实例查询；新主实例只继承主实例交互，以及主实例收到的委派结果。不会把所有子实例的内部 Prompt、模型消息直接摊入父上下文。
+
+恢复继续原 Run、原 frame、原发布快照与当时继承的历史。恢复接口不会重新加载后来发生的新提问。补充先进入持久队列；有未完成工具组时，先按恢复规则处理 pending，再把补充加入模型视图，避免在 tool call 与 tool result 中间插入用户消息。补充不额外增加 `user_turns`。
+
+历史中缺失结果的调用不会在新 Run 自动执行。投影器为尚未闭合的历史调用生成 `status=unknown` 的协议占位，明确不能推定成功；迟到的结果作为历史资料保留。投影重写历史 call ID，原始来源保持不变。这只是模型消息协议修复，原 Run 的副作用恢复仍遵守 ToolRuntime 检查点规则。
+
+## 4. 可复用视图与“已观察前缀”
+
+数据库 `session_views` 保存成功压缩后可复用的主实例消息视图、会话水位和压缩计数基线。新 Run 选取水位最高的合规视图，再追加该水位之后的主实例来源记录；没有视图时从现有来源投影。
+
+一个视图只能声明覆盖它确实观察过的**有序连续前缀**。当前代码会检查该 Run 继承的水位与本 Run 新记录能否形成会话主记录前缀；存在尚未处理的工具、排队补充，或混入不在 Runtime 视图中的终态记录时，不保存新的可复用视图。它不会直接用“本 Run 看过的最大序号”冒充完整会话覆盖范围。
+
+以 `A → B → C → 恢复 A → D` 为例：
+
+1. A、B、C 各自是独立 Run；B 继承 A 当时已提交的历史，C 继承 A、B。
+2. 恢复 A 只接上 A 原检查点与 A 的补充，不把 B、C 放进 A 的模型输入。
+3. A 恢复后的来源继续追加到会话末尾。即使 A 成功压缩，它也没有观察 B、C，不能创建跨过 B、C 的新会话前缀视图。
+4. D 使用已有最高合规视图与之后的来源；没有视图则使用全部现有主记录。D 能看到 B、C 和恢复 A 的新记录，不遗漏它们，也不把 A 原始记录重复追加。
+5. D 的用户轮数和主实例模型步骤总数来自来源记录，基线来自合规视图；不会把 A 局部恢复后的基线误当成整个会话最新基线。
+
+这一规则已覆盖旧 Run 恢复造成的顺序交错。它还不是任意分支合并、分布式并发写入或完整依赖版本 CAS 协议。
+
+## 5. 默认 80% 与可配置阈值
+
+新建或保存 Agent 草稿时，API 默认写入以下字段，发布后冻结：
+
+```json
+{
+  "context_policy": {
+    "context_ratio": 0.8,
+    "target_ratio": 0.6,
+    "user_turns": null,
+    "model_steps": null,
+    "max_compaction_calls": 4
+  }
+}
+```
+
+比例必须满足 `0 < target_ratio < context_ratio <= 1`。轮数、步骤数为正整数或 `null`；API 的压缩调用次数允许 1 至 16。子 Agent 不配置独立策略或模型，继承主 Agent 的策略与模型预算，维护自己的实例上下文。
+
+模型连接的预算字段是 `context_window`、`max_output_tokens`、`safety_margin_tokens`。计算规则：
+
+```text
+有效输入预算 = context_window - max_output_tokens - safety_margin_tokens
+预算触发条件 = 估算请求大小 >= 有效输入预算 × context_ratio
+轮数触发条件 = user_turns - baseline_user_turns >= 配置轮数
+步骤触发条件 = model_steps - baseline_model_steps >= 配置步骤数
+触发 = 任一启用条件成立
+```
+
+`user_turns` 每次新提问增加一次，恢复、补充、模型重试不增加。`model_steps` 记录当前实例成功接收并保存的 action 模型响应；摘要、完成检查不增加，子实例也不增加父实例计数。成功压缩后基线更新为当时计数；恢复读取检查点，新 Run 从会话来源与合规视图继承总数和基线。ExecutionLimits 的单次执行调用预算仍可在恢复时重置，两种计数用途不同。
+
+**当前估算器按 UTF-8 JSON 字节数，加消息/工具封装余量估算。** 输入包括 messages 和工具 Schema。这是保守的估计量，不是供应商 tokenizer 的精确 Token 数，也不是 provider 返回的实际 usage。可能比真实 Token 数提前很多触发，不能据此宣称已经用满模型实际窗口；可注入有版本的供应商专用估算器。
+
+例如未知模型暂用 32,768 窗口、4,096 输出预留、1,024 安全边距时，有效输入预算为 27,648，80% 触发点约为 22,118 个估计单位。**32K 仅是平台回退值，不是 DeepSeek 或 OpenAI 模型的官方统一上限。**
+
+## 6. 压缩、硬限制与失败
+
+行动模型调用前，先完成 pending 工具组、接收补充，再请求 ContextManager 准备上下文。压缩保留系统指令、当前任务和计划，按完整工具调用/结果组保留近期交互；其余历史分段生成交接摘要。特别大的已完成组会序列化为有序文本片段，逐段消费，避免构造孤立工具消息或默默丢掉后半段。
+
+默认目标是有效输入预算的 60%，但它是减量目标。成功提交要求视图实际缩小并降到触发比例以下；指标 `target_reached` 明确表示是否降到目标比例。没有可压缩历史、仅轮数触发却无减量收益，或必要内容已占较多预算但仍在硬限内时，可以跳过压缩而不推进基线。
+
+每轮压缩有 `max_compaction_calls` 上限，所有摘要调用也受 Runtime 总模型调用预算约束。摘要为空、非减量、调用失败或不能满足边界时，不替换原视图，不推进成功基线。来源仍保留。当前只限制一次准备中的压缩调用数，尚未实现跨恢复持久化的失败尝试记录、增长门槛与退避节流。
+
+预算策略在实际调用网关前校验 action、compaction、verification 的完整请求。硬超限时停止发送。完成检查仍使用现有证据和近期消息裁剪策略；本轮不进一步删除必要任务、计划或证据来强行适配小窗口。若完成检查自身仍超限，会停止，原始来源与候选结果保留，不能把跳过检查当成任务完成。
+
+注意：旧 Run 的模型预算和策略随发布版本及检查点绑定冻结。临时修改模型资源或草稿**不能**扩大这个旧 Run 的预算后直接恢复。相同配置下的临时失败可恢复；确实需要更大预算时，应调整配置、重新发布并创建新 Run/会话，或以后使用明确实现的检查点迁移工具。当前没有自动迁移工具。
+
+## 7. 模型列表与窗口元数据
+
+管理员在模型页选择供应商、填写 API Key、点击“获取可用模型”，再选择模型。请求接口：
+
+```text
+POST /api/models/discover
+{provider, base_url, api_key, resource_id?}
+```
+
+发现请求不保存新 Key；保存模型连接时才使用现有加密存储。编辑连接时允许留空 Key 并引用同空间资源；只有供应商和基础地址均未改变，才允许复用原密钥。HTTP 客户端不读取环境代理、不跟随重定向，限制响应大小，错误不会回显供应商响应正文或凭据。
+
+| 参数来源 | 行为 |
+| -------- | ---- |
+| 服务商响应 `provider` | 优先使用列表返回的有效 `context_window`、`max_output_tokens`。DeepSeek 当前列表接口提供这些字段。 |
+| 官方清单 `official_manifest` | OpenAI 官方 `/v1/models` 不返回窗口参数，平台对已核对的精确模型 ID 使用内置清单，保留来源链接和核对日期；不按名称前缀猜测，不自动套到自定义代理。 |
+| 平台回退 `platform_default` | 没有识别窗口参数时显示 32K 回退提示，管理员可在高级设置核对和覆盖。 |
+| 手动 `manual` | 管理员手动填写模型 ID 或覆盖预算，界面标识其来源。 |
+
+供应商的最大输出上限与本平台配置的 `max_output_tokens` 分开：配置初始通常为 4,096，自动选择时不会超过已知供应商上限。此配置同时作为输入预算预留和真实请求输出限制：OpenAI Chat Completions 使用 `max_completion_tokens`，DeepSeek 使用 `max_tokens`。
+
+模型列表可见不保证额度和调用权限。已识别不支持当前聊天接口的型号不会作为聊天模型直接选用；未知型号仍需验证服务兼容。当前清单是有限的版本化数据，不是全型号自动识别系统。
+
+来源：[DeepSeek 模型列表](https://api-docs.deepseek.com/api/list-models/)、[OpenAI 模型列表](https://developers.openai.com/api/reference/resources/models/methods/list)。精确型号、窗口、来源和日期见[模型目录实现](../apps/api/agentloom/services/model_catalog.py)；例如 [GPT-4.1](https://developers.openai.com/api/docs/models/gpt-4.1) 和 [GPT-4o](https://developers.openai.com/api/docs/models/gpt-4o)。
+
+## 8. 查询来源与兼容旧数据
+
+```text
+GET /api/v1/sessions/{session_id}/messages?after=0&limit=100&instance=main
+```
+
+响应包含 `items` 和 `next_after`。每项含 `seq`、`run_id`、`instance`、`kind`、解密后的 `message`。`limit` 默认为 100，允许 1 至 200；`after` 是非负会话序号。`instance` 可省略以查看所有实例，也可传 `main` 或具体子实例 ID。实例过滤后序号允许不连续；将 `next_after` 用于下一页，空页保留原游标。接口只允许同空间的会话创建者访问，不因空间中 Agent 共享而共享每个人的会话原文。
+
+新建和保存草稿会带默认策略；已有发布快照不会原地回填。没有 `context_policy` 的旧版本继续选择字符阈值策略，以保留其运行和检查点兼容性。重新保存、发布后，新的版本才选择预算策略。
+
+旧检查点缺少来源记录时，兼容代码仅接纳仍然存在的本 Run 消息后缀；其他旧运行采用尚存的用户输入、输出和状态资料。此过程幂等，恢复出的上下文标记 `raw_complete=false`。过去已经丢弃的工具详情、被覆盖的补充或原始压缩前历史无法还原，不能把旧摘要宣称为完整原文。
+
+## 9. 验证范围与后续工作
+
+本轮后端 212 项、前端 10 项测试通过；项目检查脚本范围内的 Ruff、前端格式检查、类型检查和生产构建通过。模型配置页面已在独立 SQLite 测试工作台检查布局。SQLite 新增迁移已执行验证；PostgreSQL 提供同等迁移脚本，本轮未连接用户远程数据库执行。
+
+针对本轮新增的隔离测试覆盖：连续超过 6 次提问继承工具记录、失败任务与补充保留、旧 Run 恢复不看到后续问题、已观察前缀冲突、分页与用户隔离、来源加密、80%/轮次 OR 阈值、持久基线、整组工具协议、大组分段摘要、失败不改写来源、硬预算、发布冻结、模型目录与凭据边界。
+
+主要测试：[上下文管理](../tests/test_context_manager.py)、[会话历史](../tests/test_session_history.py)、[配置冻结](../tests/test_context_config.py)、[模型目录](../tests/test_model_catalog.py)。后端测试使用临时 SQLite 与可控模型替身，不代表真实供应商、用户 PostgreSQL 或完整容器环境已通过集成验证。
+
+后续仍需：类型化来源与精确摘要来源范围、资源修订和撤权后的视图失效、通用大结果引用与回读、版本化 StateStore/CAS、按 purpose 的完整装配策略、实际 Token usage 与供应商 tokenizer、持久压缩失败节流、MemoryService、统一 HookManager，以及多进程任务调度。SVG 继续表示目标架构，本轮未修改图源。

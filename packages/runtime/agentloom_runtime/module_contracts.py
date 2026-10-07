@@ -29,6 +29,8 @@ class ContextInput:
     plan: list[dict]
     messages: list[dict]
     instance: str
+    tools: list[dict] = field(default_factory=list)
+    counters: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -41,6 +43,30 @@ class CompactionPolicy(Protocol):
     module_id: str
 
     async def compact(self, context: ContextInput, model: ModelCall) -> CompactionResult | None: ...
+
+
+@dataclass
+class ManagedContext:
+    """Durable message state owned by a context manager, without execution state."""
+
+    messages: list[dict]
+    state: dict
+
+
+class ContextManager(Protocol):
+    module_id: str
+
+    def create(self, task, prompt, history=(), history_metadata=None) -> ManagedContext: ...
+
+    def restore(self, messages, state, task) -> ManagedContext: ...
+
+    def append(self, context, message, kind, *, visible_message=None, model_step=False): ...
+
+    def queue_input(self, context, instruction): ...
+
+    def drain_inputs(self, context) -> bool: ...
+
+    async def prepare(self, context, task, plan, instance, tools, policy, model) -> dict | None: ...
 
 
 @dataclass(frozen=True)

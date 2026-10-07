@@ -4,7 +4,6 @@ import asyncio
 import json
 import sqlite3
 import threading
-import time
 
 import psycopg
 from agentloom_runtime.runtime import create_engine
@@ -13,7 +12,8 @@ from psycopg_pool import PoolTimeout
 
 from agentloom import store as db
 from agentloom.knowledge import search
-from agentloom.security import decrypt, encrypt
+from agentloom.security import decrypt
+from agentloom.services.session_history import save_checkpoint
 from agentloom.state import PENDING_FINALIZATIONS, TASKS
 
 _CONNECTION_ERRORS = (psycopg.OperationalError, psycopg.InterfaceError, PoolTimeout)
@@ -69,7 +69,9 @@ async def repair_finalizations():
             raise
 
 
-async def execute_run(rid, snap, space, history, checkpoint=None, instruction=""):
+async def execute_run(
+    rid, snap, space, history, checkpoint=None, instruction="", history_metadata=None
+):
     secrets_in_use = []
     engine = None
 
@@ -104,11 +106,7 @@ async def execute_run(rid, snap, space, history, checkpoint=None, instruction=""
         async with asyncio.timeout(600):
 
             def save(state):
-                db.execute(
-                    "INSERT INTO checkpoints(run_id,payload,updated) VALUES(?,?,?) "
-                    "ON CONFLICT(run_id) DO UPDATE SET payload=excluded.payload,updated=excluded.updated",
-                    (rid, encrypt(json.dumps(state, ensure_ascii=False)), time.time()),
-                )
+                save_checkpoint(rid, state, redact)
 
             engine = create_engine(
                 snap,
@@ -121,7 +119,7 @@ async def execute_run(rid, snap, space, history, checkpoint=None, instruction=""
             )
             if checkpoint:
                 engine.resume(instruction)
-            output = redact(await engine.execute(row["input"], history))
+            output = redact(await engine.execute(row["input"], history, history_metadata))
             status = "needs_input" if engine.blocked else "succeeded"
             finish_run(
                 rid,

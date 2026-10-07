@@ -4,6 +4,7 @@ import asyncio
 import json
 import time
 
+from agentloom_runtime.context_manager import queue_instruction
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 
@@ -11,7 +12,8 @@ from agentloom import store as db
 from agentloom.assets import safe_path
 from agentloom.dependencies import auth
 from agentloom.schema import ResumeInput, RunInput
-from agentloom.security import decrypt
+from agentloom.security import decrypt, encrypt
+from agentloom.services import session_history
 from agentloom.services.agents import get_agent
 from agentloom.services.runs import (
     events_stream,
@@ -42,6 +44,7 @@ async def run_agent(aid: str, payload: RunInput, user=Depends(auth)):
     rid = db.uid()
     history = []
     with db.transaction("space:" + user["space_id"]) as c:
+        db.lock(c, "session:" + sid)
         if (
             c.execute(
                 "SELECT COUNT(*) AS n FROM runs WHERE space_id=? AND status IN ('queued','running')",
@@ -67,17 +70,7 @@ async def run_agent(aid: str, payload: RunInput, user=Depends(auth)):
                 "INSERT INTO sessions VALUES(?,?,?,?,?)",
                 (sid, user["space_id"], user["user_id"], aid, version),
             )
-        previous = c.execute(
-            "SELECT input,output FROM runs WHERE session_id=? AND status='succeeded' ORDER BY created DESC LIMIT 6",
-            (sid,),
-        ).fetchall()
-        for r in reversed(previous):
-            history.extend(
-                [
-                    {"role": "user", "content": r["input"]},
-                    {"role": "assistant", "content": r["output"]},
-                ]
-            )
+        history, history_metadata = session_history.inherit(c, sid)
         db.lock(c, "run:" + rid)
         c.execute(
             "INSERT INTO runs(id,space_id,user_id,agent_id,version,session_id,input,status,created) VALUES(?,?,?,?,?,?,?,?,?)",
@@ -96,7 +89,12 @@ async def run_agent(aid: str, payload: RunInput, user=Depends(auth)):
         db._insert_event(
             c, rid, "run.created", {"run_id": rid, "session_id": sid, "version": version}
         )
-    TASKS[rid] = asyncio.create_task(execute_run(rid, snap, user["space_id"], history))
+        session_history.append(
+            c, sid, rid, "main", "1", "user_input", {"role": "user", "content": payload.input}
+        )
+    TASKS[rid] = asyncio.create_task(
+        execute_run(rid, snap, user["space_id"], history, history_metadata=history_metadata)
+    )
     if payload.stream:
         return StreamingResponse(
             events_stream(rid, user),
@@ -187,6 +185,7 @@ async def resume_run(rid: str, payload: ResumeInput, user=Depends(auth)):
     # Validate current credentials before changing a terminal run to queued.
     db.resource(snap["model_obj"]["id"], user["space_id"], "models")
     with db.transaction("space:" + user["space_id"]) as c:
+        db.lock(c, "session:" + row["session_id"])
         db.lock(c, "run:" + rid)
         current = c.execute("SELECT status FROM runs WHERE id=?", (rid,)).fetchone()["status"]
         if current not in ("failed", "cancelled", "interrupted", "needs_input"):
@@ -208,11 +207,16 @@ async def resume_run(rid: str, payload: ResumeInput, user=Depends(auth)):
         if not saved:
             raise ValueError("此任务没有可恢复的执行检查点，请新建任务")
         checkpoint = json.loads(decrypt(saved["payload"]))
+        if payload.input:
+            queue_instruction(checkpoint, payload.input)
+            session_history.sync_records(c, row["session_id"], rid, checkpoint)
+            c.execute(
+                "UPDATE checkpoints SET payload=?,updated=? WHERE run_id=?",
+                (encrypt(json.dumps(checkpoint, ensure_ascii=False)), time.time(), rid),
+            )
         c.execute("UPDATE runs SET status='queued',output='',error=NULL WHERE id=?", (rid,))
         after = db._insert_event(c, rid, "run.resumed", {"input": payload.input, "run_id": rid}) - 1
-    TASKS[rid] = asyncio.create_task(
-        execute_run(rid, snap, user["space_id"], [], checkpoint, payload.input)
-    )
+    TASKS[rid] = asyncio.create_task(execute_run(rid, snap, user["space_id"], [], checkpoint))
     if payload.stream:
         return StreamingResponse(
             events_stream(rid, user, after),
@@ -238,3 +242,10 @@ def artifact(rid: str, path: str, user=Depends(auth)):
     if not p.is_file():
         raise HTTPException(404)
     return FileResponse(p, filename=p.name, media_type="application/octet-stream")
+
+
+@router.get("/api/v1/sessions/{sid}/messages")
+def session_messages(
+    sid: str, after: int = 0, limit: int = 100, instance: str | None = None, user=Depends(auth)
+):
+    return session_history.read_messages(sid, user, after, limit, instance)

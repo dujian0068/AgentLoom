@@ -62,6 +62,9 @@ async def request(model, endpoint, payload, secret):
 
 async def chat(model, messages, tools, secret):
     payload = {"model": model["model_id"], "messages": messages}
+    if model.get("max_output_tokens"):
+        limit_key = "max_completion_tokens" if model.get("provider") == "openai" else "max_tokens"
+        payload[limit_key] = model["max_output_tokens"]
     if tools:
         payload["tools"] = tools
     data = await request(model, "/chat/completions", payload, secret)

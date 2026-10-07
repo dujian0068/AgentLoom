@@ -1,4 +1,29 @@
 export type Resource = { id: string; name: string; [key: string]: any };
+export type ContextPolicy = {
+  context_ratio: number;
+  target_ratio: number;
+  user_turns: number | null;
+  model_steps: number | null;
+  max_compaction_calls: number;
+};
+export type ModelBudget = {
+  context_window: number;
+  max_output_tokens: number;
+  safety_margin_tokens: number;
+};
+export type ModelMetadata = {
+  source: "manual" | "provider" | "official_manifest" | "platform_default";
+  source_url: string;
+  verified_at: string;
+  provider_max_output_tokens: number | null;
+  chat_compatible: boolean | null;
+};
+export type DiscoveredModel = ModelBudget & {
+  id: string;
+  name: string;
+  purpose: "chat" | "embedding";
+  metadata: ModelMetadata;
+};
 export type Child = {
   id: string;
   name: string;
@@ -14,12 +39,14 @@ export type Agent = {
   model: string;
   prompt: string;
   mode: "react" | "plan";
+  context_policy?: ContextPolicy;
   skills: string[];
   tools: string[];
   wiki: string[];
   subs: Child[];
   published?: number;
 };
+export type AgentDraft = Agent & { context_policy: ContextPolicy };
 export type RunStatus =
   | "queued"
   | "running"

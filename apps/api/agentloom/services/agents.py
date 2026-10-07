@@ -2,6 +2,7 @@
 
 import json
 
+from agentloom_runtime.budget import normalized_profile
 from fastapi import HTTPException
 
 from agentloom import store as db
@@ -18,6 +19,9 @@ def snapshot(config, space):
     model = db.resource(config["model"], space, "models")
     if model["purpose"] != "chat":
         raise ValueError("Agent 必须选择聊天模型")
+    if "context_policy" in config:
+        # Freeze effective defaults when reusing a model created before budgets existed.
+        model.update(normalized_profile(model))
     result = {"config": config, "model_obj": model}
     for kind in ("skills", "tools", "wiki"):
         ids = set(config[kind])

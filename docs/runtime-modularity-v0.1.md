@@ -1,10 +1,10 @@
 # AgentLoom Runtime 模块化实现 v0.1
 
-2026-10-07 · 当前代码接口与使用说明
+2026-10-07 · 第一轮模块化接口与使用说明
 
-本轮将模型调用、上下文压缩、完成判断和 ReAct / Plan 行为拆成可注入模块，并收窄工具处理器、事件观察者可以接触的状态。默认运行行为保持原有实现：字符阈值压缩、完成检查、主子任务循环及 format=1 检查点。
+本轮将模型调用、上下文压缩、完成判断和 ReAct / Plan 行为拆成可注入模块，并收窄工具处理器、事件观察者可以接触的状态。本页保留第一轮接口和当时验证结果。
 
-这是模块化的第一步。独立 ContextManager、Token 预算及 80% / 轮数主动压缩、完整会话历史继承、Memory、统一 HookManager 仍是[目标设计](context-management-design-v0.1.md)，不能因已有同名端口就认为全部完成。
+> **后续实现更新：** 已增加可注入 ContextManager、连续会话来源、可复用视图和预算 / 轮数主动压缩，见[上下文实现 v0.2](runtime-context-v0.2.md)。新保存并发布的配置默认使用 80% 策略；缺少策略的旧发布版本保留字符压缩。当前 Token 大小采用保守估算，Memory、统一 HookManager 与完整类型化来源仍待实现。
 
 ## 1. 已实现的模块与契约
 
@@ -13,7 +13,8 @@
 | 模块 | 契约 | 默认实现与边界 |
 | ---- | ---- | ------------ |
 | ModelGateway | `invoke(ModelRequest) -> dict` | [ProviderModelGateway](../packages/runtime/agentloom_runtime/model_gateway.py) 调用 provider 并解析模型凭据；Engine 不再持有 provider 或模型解密回调。 |
-| CompactionPolicy | `compact(ContextInput, ModelCall) -> CompactionResult \| None` | [CharacterCompactionPolicy](../packages/runtime/agentloom_runtime/context.py) 默认超过 60,000 字符压缩，近期目标 16,000 字符；可注入其他算法。 |
+| CompactionPolicy | `compact(ContextInput, ModelCall) -> CompactionResult \| None` | [BudgetCompactionPolicy / CharacterCompactionPolicy](../packages/runtime/agentloom_runtime/context.py)：新发布策略使用预算 / 轮数，旧无策略版本保留 60,000 字符触发与 16,000 近期目标。 |
+| ContextManager | `create / restore / append / queue_input / drain_inputs / prepare` | [JournalContextManager](../packages/runtime/agentloom_runtime/context_manager.py) 管理来源、可见视图、摘要快照和计数；通过 `context_manager=` 注入。 |
 | CompletionPolicy | `review(CompletionInput, ModelCall) -> CompletionDecision` | [EvidenceCompletionPolicy](../packages/runtime/agentloom_runtime/completion.py) 返回 complete / continue / blocked；默认完成检查仍用模型，不能替代实际工具证据。 |
 | ExecutionStrategy | `instructions`、`candidate_feedback`、`authorize_tool` | [ReactStrategy / PlanStrategy](../packages/runtime/agentloom_runtime/execution_strategy.py) 提供指令、交付前反馈与工具准入；子 Agent 不单独配置模式。 |
 | ExecutionLimits | `max_model_calls`、`max_iterations` | 正整数，默认 96 次模型调用、64 次 Loop；摘要和完成检查同样消耗模型调用预算。 |
@@ -35,6 +36,7 @@ create_engine(
     checkpoint=None, save=None, configure_tools=None,
     *, model_gateway=None, compaction_policy=None,
     completion_policy=None, strategy=None, limits=None, registry=None,
+    context_manager=None,
 )
 ```
 
@@ -134,7 +136,7 @@ asyncio.run(main())
 
 恢复要求每个工具声明带版本的 `implementation_id`，例如 `ToolDefinition(..., implementation_id="example-tool/v1")`。未声明版本的自定义工具可用于新 Run，但不能据其检查点直接恢复。工厂通过 `registry.implementation_namespace("builtin-tools/v1")` 为内置注册批次生成版本标识，该命名空间不覆盖后来追加的自定义工具。工具实现或授权判断发生不兼容变化时，开发者须升级标识；仅改函数内容而复用旧标识不会被内容哈希自动识别。
 
-当前机制是模块恢复兼容检查，不是完整资源发布系统，也没有自动迁移任意自定义模块私有状态。模型及工具绑定已有兼容检查，Skill 包等完整资源修订和发布存储仍受现有能力限制。恢复时现有 Engine 会重置本次执行调用/Loop 预算；未来跨提问的压缩计数基线必须独立保存，不能复用这些计数。
+当前机制是模块恢复兼容检查，不是完整资源发布系统，也没有自动迁移任意自定义模块私有状态。模型及工具绑定已有兼容检查，Skill 包等完整资源修订和发布存储仍受现有能力限制。恢复时 Engine 会重置本次执行调用/Loop 预算；跨提问的压缩计数基线现已独立保存在上下文检查点与合规会话视图，不复用这些执行预算计数。
 
 ## 6. 验证与后续工作
 
@@ -144,7 +146,7 @@ asyncio.run(main())
 
 下一阶段沿已建立端口推进：
 
-1. 将上下文来源、会话历史、预算与压缩视图收敛到独立 ContextManager；实现 80% / 轮数配置及可恢复压缩基线。
+1. ContextManager、80% / 轮数配置与恢复基线的第一版已在 v0.2 落地；继续补齐精确来源映射、按用途装配、资源修订与持久压缩节流。
 2. 将 format=1 宿主状态适配逐步替换为版本化 StateStore、PlanManager 和 ChildTaskManager 契约。
 3. 增加统一 HookManager，让模型、工具、上下文各阶段共享受约束的挂点与恢复规则。
 4. 补齐资源版本、长期 Memory 及各模块真实供应商/环境验证；跨进程调度仍需单独设计持久协议。

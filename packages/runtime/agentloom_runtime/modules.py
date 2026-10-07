@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass
 from .module_contracts import (
     CompactionPolicy,
     CompletionPolicy,
+    ContextManager,
     ExecutionLimits,
     ExecutionStrategy,
     ModelGateway,
@@ -19,11 +20,12 @@ class RuntimeModules:
     compaction: CompactionPolicy
     completion: CompletionPolicy
     strategy: ExecutionStrategy
+    context: ContextManager
     limits: ExecutionLimits
 
     def bindings(self):
         bindings = {}
-        for name in ("model", "compaction", "completion", "strategy"):
+        for name in ("model", "compaction", "completion", "strategy", "context"):
             module = getattr(self, name)
             identity = getattr(module, "module_id", None)
             if not isinstance(identity, str) or not identity.strip():
@@ -36,7 +38,7 @@ class RuntimeModules:
 
     async def aclose(self):
         errors, seen = [], set()
-        for module in (self.strategy, self.completion, self.compaction, self.model):
+        for module in (self.strategy, self.completion, self.context, self.compaction, self.model):
             if id(module) in seen:
                 continue
             seen.add(id(module))

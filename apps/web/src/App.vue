@@ -17,7 +17,26 @@ import {
   Search,
 } from "lucide-vue-next";
 import { api, post, put } from "./api";
-import type { Agent, Child, Resource } from "./domain/types";
+import type {
+  Agent,
+  AgentDraft,
+  Child,
+  DiscoveredModel,
+  Resource,
+} from "./domain/types";
+import {
+  contextPolicyError,
+  defaultContextPolicy,
+  modelBudget,
+  modelBudgetError,
+  prepareAgentDraft,
+} from "./domain/contextPolicy";
+import {
+  applyModelSelection,
+  defaultModelMetadata,
+  invalidateModelSelection,
+  modelSelectionError,
+} from "./domain/modelCatalog";
 import { titles, descriptions, statusNames } from "./domain/labels";
 import { useRunWorkspace } from "./composables/useRunWorkspace";
 import PublishedAgentView from "./components/PublishedAgentView.vue";
@@ -37,7 +56,7 @@ const page = ref("agents"),
     wiki: [],
   }),
   filter = ref(""),
-  draft = ref<Agent | null>(null);
+  draft = ref<AgentDraft | null>(null);
 const modal = ref(""),
   form = ref<any>({}),
   files = ref<File[]>([]),
@@ -45,6 +64,11 @@ const modal = ref(""),
   error = ref(""),
   toast = ref(""),
   timer = ref<any>(null);
+const modelCatalog = ref<DiscoveredModel[]>([]);
+let catalogRevision = 0;
+const modelChoices = computed(() =>
+  modelCatalog.value.filter((model) => model.purpose === form.value.purpose),
+);
 const members = ref<any[]>([]),
   invite = ref(""),
   keys = ref<any[]>([]),
@@ -100,12 +124,13 @@ async function action(fn: () => Promise<void>) {
     saving.value = false;
   }
 }
-function emptyAgent(): Agent {
+function emptyAgent(): AgentDraft {
   return {
     name: "",
     model: chats.value[0]?.id || "",
     prompt: "",
     mode: "react",
+    context_policy: defaultContextPolicy(),
     skills: [],
     tools: [],
     wiki: [],
@@ -180,7 +205,7 @@ async function navigate(p: string) {
   });
 }
 function edit(a: Agent) {
-  draft.value = JSON.parse(JSON.stringify(a));
+  draft.value = prepareAgentDraft(a);
   page.value = "editor";
 }
 function create() {
@@ -194,10 +219,12 @@ function config() {
 }
 async function saveDraft() {
   if (!draft.value?.name.trim()) throw new Error("请填写 Agent 名称");
+  const policyError = contextPolicyError(draft.value.context_policy);
+  if (policyError) throw new Error(policyError);
   const result = draft.value.id
     ? await put("/agents/" + draft.value.id, config())
     : await post("/agents", config());
-  draft.value = result;
+  draft.value = prepareAgentDraft(result);
   await refresh();
   return result;
 }
@@ -219,6 +246,12 @@ async function publishAgent() {
 function openModal(kind: string, value: any = {}) {
   modal.value = kind;
   form.value = JSON.parse(JSON.stringify(value));
+  modelCatalog.value = [];
+  catalogRevision++;
+  if (kind === "model")
+    Object.assign(form.value, modelBudget(value), {
+      metadata: value.metadata || defaultModelMetadata(),
+    });
   files.value = [];
   error.value = "";
   keyResult.value = "";
@@ -227,9 +260,68 @@ function closeModal() {
   if (saving.value) return;
   modal.value = "";
   form.value = {};
+  modelCatalog.value = [];
+  catalogRevision++;
   files.value = [];
   error.value = "";
   keyResult.value = "";
+}
+function resetModelDiscovery() {
+  modelCatalog.value = [];
+  catalogRevision++;
+  invalidateModelSelection(form.value);
+}
+function changeModelProvider() {
+  form.value.base_url =
+    form.value.provider === "openai"
+      ? "https://api.openai.com/v1"
+      : "https://api.deepseek.com";
+  form.value.api_key = "";
+  resetModelDiscovery();
+}
+function selectDiscoveredModel(event: Event) {
+  const selected = modelCatalog.value.find(
+    (model) => model.id === (event.target as HTMLSelectElement).value,
+  );
+  if (selected) applyModelSelection(form.value, selected);
+}
+function manualModelMetadata() {
+  Object.assign(form.value, modelBudget());
+  form.value.metadata = { ...defaultModelMetadata(), source: "manual" };
+}
+function manualBudgetMetadata() {
+  form.value.metadata = {
+    ...form.value.metadata,
+    source: "manual",
+    source_url: "",
+    verified_at: "",
+  };
+}
+const metadataSourceLabels: Record<string, string> = {
+  provider: "参数来自服务商模型接口",
+  official_manifest: "参数来自已核对的官方模型文档",
+  platform_default: "未取得窗口元数据，暂用平台 32K 默认值，请在高级设置核对",
+  manual: "参数由管理员手动设置",
+};
+async function discoverModels() {
+  await action(async () => {
+    const revision = catalogRevision;
+    const result = await post("/models/discover", {
+      provider: form.value.provider,
+      base_url: form.value.base_url,
+      api_key: form.value.api_key || "",
+      resource_id: form.value.id || null,
+    });
+    if (revision !== catalogRevision || modal.value !== "model") return;
+    modelCatalog.value = result.models;
+    const selected = modelChoices.value.find(
+      (model) => model.id === form.value.model_id,
+    );
+    if (selected) applyModelSelection(form.value, selected);
+    else if (modelChoices.value.length === 1)
+      applyModelSelection(form.value, modelChoices.value[0]);
+    notify("已获取 " + result.models.length + " 个模型");
+  });
 }
 function picked(e: Event) {
   files.value = Array.from((e.target as HTMLInputElement).files || []);
@@ -268,6 +360,11 @@ function addResource() {
 async function submitModal() {
   await action(async () => {
     if (modal.value === "model") {
+      const selectionError = modelSelectionError(form.value);
+      if (selectionError) throw new Error(selectionError);
+      const budget = modelBudget(form.value);
+      const budgetError = modelBudgetError(budget);
+      if (budgetError) throw new Error(budgetError);
       const data = {
         name: form.value.name,
         provider: form.value.provider,
@@ -275,6 +372,8 @@ async function submitModal() {
         base_url: form.value.base_url,
         api_key: form.value.api_key || "",
         purpose: form.value.purpose,
+        ...budget,
+        metadata: form.value.metadata,
       };
       if (form.value.id) await put("/models/" + form.value.id, data);
       else await post("/models", data);
@@ -953,40 +1052,23 @@ onUnmounted(() => {
           <div class="row">
             <div>
               <label>供应商</label
-              ><select
-                v-model="form.provider"
-                @change="
-                  form.base_url =
-                    form.provider === 'openai'
-                      ? 'https://api.openai.com/v1'
-                      : 'https://api.deepseek.com'
-                "
-              >
+              ><select v-model="form.provider" @change="changeModelProvider">
                 <option value="deepseek">DeepSeek</option>
                 <option value="openai">OpenAI</option>
               </select>
             </div>
             <div>
               <label>用途</label
-              ><select v-model="form.purpose">
+              ><select
+                v-model="form.purpose"
+                @change="invalidateModelSelection(form)"
+              >
                 <option value="chat">聊天模型</option>
                 <option value="embedding">向量化模型</option>
               </select>
             </div>
           </div>
-          <label for="modelid">模型 ID</label
-          ><input
-            id="modelid"
-            v-model="form.model_id"
-            required
-            placeholder="填写供应商提供的模型 ID"
-          /><label for="baseurl">API 基础地址</label
-          ><input
-            id="baseurl"
-            v-model="form.base_url"
-            type="url"
-            required
-          /><label for="modelkey">API Key</label
+          <label for="modelkey">API Key</label
           ><input
             id="modelkey"
             v-model="form.api_key"
@@ -994,10 +1076,125 @@ onUnmounted(() => {
             :required="!form.id"
             autocomplete="new-password"
             :placeholder="form.id ? '留空保留当前 Key' : 'Key 仅存于服务端'"
+            @input="resetModelDiscovery"
           />
-          <div class="notice spaced">
-            模型 ID 可配置。向量化模型必须使用实际支持 embeddings 接口的服务。
-          </div></template
+          <div class="actions spaced">
+            <button type="button" :disabled="saving" @click="discoverModels">
+              {{ saving ? "获取中…" : "获取可用模型" }}
+            </button>
+          </div>
+          <label for="discoveredmodel">选择模型</label>
+          <select
+            id="discoveredmodel"
+            :value="form.model_id"
+            @change="selectDiscoveredModel"
+          >
+            <option value="" disabled>填写 Key 后获取模型列表</option>
+            <option
+              v-if="
+                form.model_id &&
+                !modelChoices.some((m) => m.id === form.model_id)
+              "
+              :value="form.model_id"
+            >
+              {{ form.model_id }}（当前配置）
+            </option>
+            <option
+              v-for="model in modelChoices"
+              :key="model.id"
+              :value="model.id"
+              :disabled="
+                form.purpose === 'chat' &&
+                model.metadata.chat_compatible === false
+              "
+            >
+              {{ model.name }} · {{ model.id
+              }}{{
+                model.metadata.chat_compatible === false &&
+                form.purpose === "chat"
+                  ? "（当前聊天接口不支持）"
+                  : ""
+              }}
+            </option>
+          </select>
+          <p class="muted">
+            模型列表由当前 Key
+            实时获取；可见模型的调用额度及接口权限仍由供应商决定。
+          </p>
+          <div
+            v-if="form.model_id && form.purpose === 'chat'"
+            class="notice spaced"
+          >
+            上下文窗口 {{ form.context_window.toLocaleString() }} tokens ·
+            输出预留 {{ form.max_output_tokens.toLocaleString() }} tokens。
+            {{ metadataSourceLabels[form.metadata.source] }}
+            <span v-if="form.metadata.verified_at"
+              >（{{ form.metadata.verified_at }}）</span
+            >
+          </div>
+          <details class="spaced">
+            <summary>高级设置：服务地址、手动模型 ID 与上下文预算</summary>
+            <label for="baseurl">API 基础地址</label>
+            <input
+              id="baseurl"
+              v-model="form.base_url"
+              type="url"
+              required
+              @input="resetModelDiscovery"
+            />
+            <label for="modelid">手动模型 ID</label>
+            <input
+              id="modelid"
+              v-model="form.model_id"
+              placeholder="接口不提供列表时手动填写"
+              @input="manualModelMetadata"
+            />
+            <template v-if="form.purpose === 'chat'">
+              <h3>上下文预算</h3>
+              <p class="muted">
+                选择模型时自动填入；也可按供应商或代理服务的实际限制覆盖。
+                未识别模型的 32,768 tokens 默认值不代表真实窗口。
+              </p>
+              <label for="contextwindow">模型上下文窗口（tokens）</label>
+              <input
+                id="contextwindow"
+                v-model.number="form.context_window"
+                type="number"
+                min="1"
+                step="1"
+                required
+                @input="manualBudgetMetadata"
+              />
+              <div class="row">
+                <div>
+                  <label for="maxoutput">最大输出 / 输出预留（tokens）</label>
+                  <input
+                    id="maxoutput"
+                    v-model.number="form.max_output_tokens"
+                    type="number"
+                    min="1"
+                    step="1"
+                    required
+                  />
+                </div>
+                <div>
+                  <label for="safetymargin">安全边距（tokens）</label>
+                  <input
+                    id="safetymargin"
+                    v-model.number="form.safety_margin_tokens"
+                    type="number"
+                    min="0"
+                    step="1"
+                    required
+                  />
+                </div>
+              </div>
+              <div class="notice spaced">
+                可用输入预算 = 上下文窗口 − 输出预留 − 安全边距。
+                最大输出同时限制单次模型响应。修改后需重新发布 Agent 才会应用。
+              </div>
+            </template>
+          </details></template
         >
         <template v-if="modal === 'skill'"
           ><label>导入方式</label

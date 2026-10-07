@@ -1,13 +1,29 @@
 <script setup lang="ts">
+import { computed } from "vue";
 import { ArrowLeft, Save, Plus, MessageSquare } from "lucide-vue-next";
 import { titles } from "../domain/labels";
-import type { Agent, Child, Resource } from "../domain/types";
-defineProps<{
-  draft: Agent;
+import type { Agent, AgentDraft, Child, Resource } from "../domain/types";
+const props = defineProps<{
+  draft: AgentDraft;
   resources: Record<string, Resource[]>;
   chats: Resource[];
   saving: boolean;
 }>();
+const triggerPercent = computed({
+  get: () =>
+    Number((props.draft.context_policy.context_ratio * 100).toFixed(4)),
+  set: (value: number) =>
+    (props.draft.context_policy.context_ratio = value / 100),
+});
+const targetPercent = computed({
+  get: () => Number((props.draft.context_policy.target_ratio * 100).toFixed(4)),
+  set: (value: number) =>
+    (props.draft.context_policy.target_ratio = value / 100),
+});
+function setCount(key: "user_turns" | "model_steps", event: Event) {
+  const value = (event.target as HTMLInputElement).value;
+  props.draft.context_policy[key] = value === "" ? null : Number(value);
+}
 const emit = defineEmits<{
   back: [];
   save: [];
@@ -84,6 +100,76 @@ const emit = defineEmits<{
             <b>Plan</b><small>自动规划、执行，并按结果调整计划</small>
           </button>
         </div>
+      </section>
+      <section>
+        <h2>上下文压缩</h2>
+        <p class="muted">
+          在模型调用前检查。默认达到可用输入预算的 80% 时主动压缩；
+          可用预算已扣除模型输出预留与安全边距。
+        </p>
+        <div class="row">
+          <div>
+            <label for="contexttrigger">预算触发比例（%）</label>
+            <input
+              id="contexttrigger"
+              v-model.number="triggerPercent"
+              type="number"
+              min="0.01"
+              max="100"
+              step="0.1"
+            />
+          </div>
+          <div>
+            <label for="contexttarget">压缩目标比例（%）</label>
+            <input
+              id="contexttarget"
+              v-model.number="targetPercent"
+              type="number"
+              min="0.01"
+              max="99.99"
+              step="0.1"
+            />
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label for="contextturns">用户输入轮数（可选）</label>
+            <input
+              id="contextturns"
+              :value="draft.context_policy.user_turns ?? ''"
+              type="number"
+              min="1"
+              step="1"
+              placeholder="留空不启用"
+              @input="setCount('user_turns', $event)"
+            />
+          </div>
+          <div>
+            <label for="contextsteps">模型执行步骤数（可选）</label>
+            <input
+              id="contextsteps"
+              :value="draft.context_policy.model_steps ?? ''"
+              type="number"
+              min="1"
+              step="1"
+              placeholder="留空不启用"
+              @input="setCount('model_steps', $event)"
+            />
+          </div>
+        </div>
+        <label for="compactioncalls">每次压缩最多调用模型次数</label>
+        <input
+          id="compactioncalls"
+          v-model.number="draft.context_policy.max_compaction_calls"
+          type="number"
+          min="1"
+          max="16"
+          step="1"
+        />
+        <p class="muted">
+          预算、轮数、步骤数满足任一条件即触发；轮数和步骤数从上次压缩后累计。
+          子 Agent 继承此策略，按自身上下文计数。修改需发布后生效。
+        </p>
       </section>
       <section v-for="kind in ['skills', 'tools', 'wiki']" :key="kind">
         <h2>{{ titles[kind] }}</h2>
