@@ -1048,6 +1048,245 @@
         }
       }
     },
+    "/api/wiki/{rid}/imports": {
+      "get": {
+        "tags": [
+          "knowledge"
+        ],
+        "summary": "Imports",
+        "operationId": "imports_api_wiki__rid__imports_get",
+        "parameters": [
+          {
+            "name": "rid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Rid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/wiki/{rid}/imports/{import_id}/resume": {
+      "post": {
+        "tags": [
+          "knowledge"
+        ],
+        "summary": "Resume Import",
+        "operationId": "resume_import_api_wiki__rid__imports__import_id__resume_post",
+        "parameters": [
+          {
+            "name": "rid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Rid"
+            }
+          },
+          {
+            "name": "import_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Import Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmbeddingResumeInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/wiki/{rid}/embedding-operations": {
+      "get": {
+        "tags": [
+          "knowledge"
+        ],
+        "summary": "Embedding Operations",
+        "operationId": "embedding_operations_api_wiki__rid__embedding_operations_get",
+        "parameters": [
+          {
+            "name": "rid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Rid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/wiki/{rid}/reindex": {
+      "post": {
+        "tags": [
+          "knowledge"
+        ],
+        "summary": "Reindex",
+        "operationId": "reindex_api_wiki__rid__reindex_post",
+        "parameters": [
+          {
+            "name": "rid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Rid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KBReindexInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/wiki/{rid}/reindex/resume": {
+      "post": {
+        "tags": [
+          "knowledge"
+        ],
+        "summary": "Resume Reindex",
+        "operationId": "resume_reindex_api_wiki__rid__reindex_resume_post",
+        "parameters": [
+          {
+            "name": "rid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Rid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmbeddingResumeInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/wiki/{rid}/documents": {
       "get": {
         "tags": [
@@ -1189,9 +1428,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "type": "object",
-                "additionalProperties": true,
-                "title": "Payload"
+                "$ref": "#/components/schemas/KBSearchInput"
               }
             }
           }
@@ -2110,6 +2347,18 @@
         "type": "object",
         "title": "ContextPolicy"
       },
+      "EmbeddingResumeInput": {
+        "properties": {
+          "retry_unknown_models": {
+            "type": "boolean",
+            "title": "Retry Unknown Models",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "EmbeddingResumeInput"
+      },
       "GitInput": {
         "properties": {
           "url": {
@@ -2273,13 +2522,128 @@
             "type": "string",
             "title": "Embedding Id",
             "default": ""
+          },
+          "embedding_hooks": {
+            "items": {
+              "$ref": "#/components/schemas/HookBindingInput"
+            },
+            "type": "array",
+            "maxItems": 32,
+            "title": "Embedding Hooks"
+          },
+          "embedding_dimensions": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 65536.0,
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Embedding Dimensions"
           }
         },
+        "additionalProperties": false,
         "type": "object",
         "required": [
           "name"
         ],
         "title": "KBInput"
+      },
+      "KBReindexInput": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "embedding_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Embedding Id"
+          },
+          "embedding_hooks": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/HookBindingInput"
+                },
+                "type": "array",
+                "maxItems": 32
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Embedding Hooks"
+          },
+          "embedding_dimensions": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 65536.0,
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Embedding Dimensions"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "KBReindexInput"
+      },
+      "KBSearchInput": {
+        "properties": {
+          "retry_unknown_models": {
+            "type": "boolean",
+            "title": "Retry Unknown Models",
+            "default": false
+          },
+          "query": {
+            "type": "string",
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Query"
+          },
+          "embedding_operation_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Embedding Operation Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "query"
+        ],
+        "title": "KBSearchInput"
       },
       "Login": {
         "properties": {

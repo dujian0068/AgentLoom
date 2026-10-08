@@ -2,10 +2,10 @@ import json
 import math
 import re
 
-from agentloom_runtime.provider import embeddings
+from agentloom_runtime.provider import embedding_response as embeddings
 
 from . import store as db
-from .security import decrypt
+from .services import embedding
 
 
 def terms(text):
@@ -37,69 +37,35 @@ def embedding_signature(model):
 
 
 async def add_document(space, kb, name, text):
-    if not text.strip():
-        raise ValueError("文件内容为空")
-    chunks = list(split_text(text))
-    vectors = [None] * len(chunks)
-    signature = ""
-    if kb.get("embedding_id"):
-        model = db.resource(kb["embedding_id"], space, "models")
-        if model["purpose"] != "embedding":
-            raise ValueError("请选择向量化模型连接")
-        vectors = []
-        for i in range(0, len(chunks), 32):
-            vectors.extend(
-                await embeddings(
-                    model, [x[2] for x in chunks[i : i + 32]], decrypt(model["secret"])
-                )
-            )
-        signature = embedding_signature(model)
-    did = db.uid()
-    with db.transaction("resource:" + kb["id"]) as c:
-        current = c.execute(
-            "SELECT payload FROM resources WHERE id=? AND space_id=? AND kind='wiki'",
-            (kb["id"], space),
-        ).fetchone()
-        if current is None:
-            raise ValueError("知识库不存在或无权访问")
-        payload = json.loads(current["payload"])
-        revision = payload.get("revision", 0) + 1
-        c.execute(
-            "INSERT INTO documents VALUES(?,?,?,?,?,?,0)",
-            (did, kb["id"], space, name, text, revision),
-        )
-        for (start, end, content), vec in zip(chunks, vectors):
-            cid = db.uid()
-            c.execute(
-                "INSERT INTO chunks VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-                (
-                    cid,
-                    did,
-                    kb["id"],
-                    space,
-                    name,
-                    content,
-                    start,
-                    end,
-                    revision,
-                    json.dumps(vec) if vec else None,
-                    signature,
-                ),
-            )
-            c.execute("INSERT INTO chunk_fts VALUES(?,?)", (cid, terms(content)))
-        payload["revision"] = revision
-        payload["status"] = "ready"
-        payload["retrieval"] = "hybrid" if signature else "keyword"
-        c.execute(
-            "UPDATE resources SET payload=? WHERE id=? AND space_id=?",
-            (json.dumps(payload), kb["id"], space),
-        )
-    return did
+    from .services.knowledge_imports import import_document
+
+    result = await import_document(space, kb, name, text, invoke=embeddings)
+    return result["id"]
 
 
-async def search(space, libraries, query):
+async def search(
+    space,
+    libraries,
+    query,
+    *,
+    actor_id=None,
+    run_id=None,
+    embedding_operation_id=None,
+    embedding_operation_ids=None,
+    retry_unknown=False,
+):
+    if embedding_operation_id and embedding_operation_ids is not None:
+        raise ValueError("不能同时提供单次与多知识库的向量化操作 ID")
+    if embedding_operation_ids is not None and (
+        type(embedding_operation_ids) is not dict
+        or set(embedding_operation_ids) != {kb["id"] for kb in libraries if kb.get("embedding_id")}
+        or any(type(value) is not str or not value for value in embedding_operation_ids.values())
+        or len(set(embedding_operation_ids.values())) != len(embedding_operation_ids)
+    ):
+        raise ValueError("向量化操作 ID 必须与本次知识库绑定一一对应")
     allowed = []
     for kb in libraries:
+        db.resource(kb["id"], space, "wiki")
         docs = kb.get("documents")
         if docs is None:
             docs = [
@@ -153,26 +119,56 @@ async def search(space, libraries, query):
             )
         for i, h in enumerate(hits):
             rank[h["id"]] = 1 / (60 + i + 1)
-    vector_groups = {}
+    selected_operation = None
+    if embedding_operation_id:
+        selected_operation = embedding.get_operation(space, embedding_operation_id, actor_id)
+        if selected_operation["purpose"] != "query" or selected_operation["kb_id"] not in {
+            kb["id"] for kb in libraries
+        }:
+            raise ValueError("恢复的向量化操作不属于本次查询")
     for kb in libraries:
-        if kb.get("embedding_id"):
-            model = db.resource(kb["embedding_id"], space, "models")
-            vector_groups[embedding_signature(model)] = model
-    for signature, model in vector_groups.items():
-        qvec = (await embeddings(model, [query], decrypt(model["secret"])))[0]
+        if not kb.get("embedding_id"):
+            continue
+        signature = embedding.index_signature(space, kb)
+        kb_rows = [row for row in rows if row["kb_id"] == kb["id"]]
+        if not kb_rows:
+            continue
+        if any(row["vector"] and row["embedding_id"] != signature for row in kb_rows):
+            raise ValueError("文档向量与知识库索引版本不一致，请重建索引")
+        operation_id = (
+            embedding_operation_id
+            if selected_operation and selected_operation["kb_id"] == kb["id"]
+            else None
+        )
+        if embedding_operation_ids is not None:
+            operation_id = embedding_operation_ids[kb["id"]]
+        vectors, _ = await embedding.embed(
+            space,
+            kb,
+            [query],
+            purpose="query",
+            actor_id=actor_id,
+            run_id=run_id,
+            operation_id=operation_id,
+            retry_unknown=retry_unknown,
+            invoke=embeddings,
+        )
+        qvec = vectors[0]
+        if kb.get("embedding_dimension") not in (None, len(qvec)):
+            raise ValueError("查询向量维度与知识库索引不一致，请重建索引")
         qnorm = math.sqrt(sum(x * x for x in qvec)) or 1
         scores = []
-        for r in rows:
-            if not r["vector"] or r["embedding_id"] != signature:
+        for row in kb_rows:
+            if not row["vector"]:
                 continue
-            v = json.loads(r["vector"])
-            if len(v) != len(qvec):
-                continue
-            cos = sum(x * y for x, y in zip(v, qvec)) / (
-                qnorm * (math.sqrt(sum(x * x for x in v)) or 1)
+            vector = json.loads(row["vector"])
+            if len(vector) != len(qvec):
+                raise ValueError("文档向量维度与查询不一致，请重建索引")
+            cosine = sum(x * y for x, y in zip(vector, qvec)) / (
+                qnorm * (math.sqrt(sum(x * x for x in vector)) or 1)
             )
-            if cos > 0:
-                scores.append((cos, r["id"]))
+            if cosine > 0:
+                scores.append((cosine, row["id"]))
         for i, (_, cid) in enumerate(sorted(scores, reverse=True)[:30]):
             rank[cid] = rank.get(cid, 0) + 1 / (60 + i + 1)
     lookup = {r["id"]: r for r in rows}

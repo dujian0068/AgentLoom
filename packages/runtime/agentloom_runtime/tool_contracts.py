@@ -112,7 +112,7 @@ class ToolDefinition:
     available: Callable[[dict, str], bool] = lambda config, instance: True
     before_plan: bool = False
     resume_inflight: bool = False
-    timeout: float = 90
+    timeout: float | None = 90
     evidence_fields: tuple[str, ...] = ()
     # Version the implementation and its availability/policy behavior, not just its schema.
     implementation_id: str | None = None

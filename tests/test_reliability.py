@@ -123,6 +123,46 @@ def test_invalid_embedding_records_are_rejected(monkeypatch, records):
         asyncio.run(provider.embeddings(MODEL, ["text"], SECRET))
 
 
+def test_embedding_response_retains_indices_usage_and_explicit_dimensions(monkeypatch):
+    requests = []
+
+    def handler(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {"index": 1, "embedding": [2, 3]},
+                    {"index": 0, "embedding": [0, 1]},
+                ],
+                "usage": {"total_tokens": 5},
+                "id": "embedding-request-1",
+                "arbitrary_metadata": SECRET,
+            },
+        )
+
+    transport(monkeypatch, handler)
+    response = asyncio.run(
+        provider.embedding_response(MODEL, ["first", "second"], SECRET, dimensions=2)
+    )
+    assert requests[0] == {
+        "model": "test-model",
+        "input": ["first", "second"],
+        "dimensions": 2,
+        "encoding_format": "float",
+    }
+    assert response == {
+        "vectors": [[2, 3], [0, 1]],
+        "indices": [1, 0],
+        "usage": {"total_tokens": 5},
+        "provider_request_id": "embedding-request-1",
+    }
+    assert asyncio.run(provider.embeddings(MODEL, ["first", "second"], SECRET)) == [
+        [0, 1],
+        [2, 3],
+    ]
+
+
 def test_cancel_during_retry_is_not_swallowed(monkeypatch):
     transport(monkeypatch, lambda req: httpx.Response(429))
 
@@ -210,7 +250,7 @@ def test_legacy_database_migrates_without_data_loss(tmp_path, monkeypatch):
         )
     db.init()
     before = db.query("SELECT * FROM schema_migrations ORDER BY version")
-    assert [row["version"] for row in before] == [1, 2, 3]
+    assert [row["version"] for row in before] == [1, 2, 3, 4]
     assert db.query("SELECT name FROM users WHERE id=?", ("legacy",), True)["name"] == "旧账号"
     db.init()
     assert db.query("SELECT * FROM schema_migrations ORDER BY version") == before

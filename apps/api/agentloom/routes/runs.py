@@ -13,7 +13,7 @@ from agentloom.assets import safe_path
 from agentloom.dependencies import auth
 from agentloom.schema import ResumeInput, RunInput
 from agentloom.security import decrypt, encrypt
-from agentloom.services import session_history
+from agentloom.services import embedding, session_history
 from agentloom.services.agents import get_agent
 from agentloom.services.runs import (
     events_stream,
@@ -116,7 +116,12 @@ def run_state(rid: str, user=Depends(auth)):
         "needs_input",
     ) and bool(saved)
     row["requires_model_retry"] = bool(
-        row["resumable"] and saved and requires_model_retry(json.loads(decrypt(saved["payload"])))
+        row["resumable"]
+        and saved
+        and (
+            requires_model_retry(json.loads(decrypt(saved["payload"])))
+            or embedding.requires_run_retry(user["space_id"], rid)
+        )
     )
     row["events"] = [
         {"seq": x["seq"], "kind": x["kind"], **json.loads(x["payload"])}
@@ -212,7 +217,9 @@ async def resume_run(rid: str, payload: ResumeInput, user=Depends(auth)):
         if not saved:
             raise ValueError("此任务没有可恢复的执行检查点，请新建任务")
         checkpoint = json.loads(decrypt(saved["payload"]))
-        if requires_model_retry(checkpoint) and not payload.retry_unknown_models:
+        if not payload.retry_unknown_models and (
+            requires_model_retry(checkpoint) or embedding.requires_run_retry(user["space_id"], rid)
+        ):
             raise HTTPException(
                 409,
                 "模型请求结果尚未确认，请先核对供应商状态；如需重试，显式设置 "

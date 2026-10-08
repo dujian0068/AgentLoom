@@ -54,7 +54,7 @@ class ToolRegistry:
             raise RuntimeError("工具注册表已冻结，运行期间不可注册工具")
         if definition.name in self._definitions:
             raise ValueError("工具名称重复：" + definition.name)
-        if definition.timeout <= 0:
+        if definition.timeout is not None and definition.timeout <= 0:
             raise ValueError("工具超时必须大于零")
         implementation_id = definition.implementation_id
         if implementation_id is None and self._implementation_namespace is not None:

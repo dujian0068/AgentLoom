@@ -11,9 +11,9 @@ from fastapi import HTTPException
 from psycopg_pool import PoolTimeout
 
 from agentloom import store as db
-from agentloom.knowledge import search
 from agentloom.security import decrypt
 from agentloom.services.hooks import hook_manager
+from agentloom.services.knowledge_search import run_knowledge_search
 from agentloom.services.session_history import save_checkpoint
 from agentloom.state import PENDING_FINALIZATIONS, TASKS
 
@@ -123,7 +123,13 @@ async def execute_run(
                 workspace,
                 emit,
                 decrypt,
-                lambda libs, q: search(space, libs, q),
+                run_knowledge_search(
+                    space,
+                    actor_id=row["user_id"],
+                    run_id=rid,
+                    checkpoint=checkpoint,
+                    retry_unknown=retry_unknown_models,
+                ),
                 checkpoint=checkpoint,
                 save=save,
                 hooks=hooks,

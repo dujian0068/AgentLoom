@@ -163,7 +163,7 @@ Loop 到达安全的模型调用边界
 | compaction | 固定摘要指令、被压缩的已完成记录、上一摘要、必要状态与来源 ID。                              | 独立预算；无行动工具；不套用普通回答改写链。   |
 | completion | 当前任务、权威计划状态、执行证据、候选回答与必要历史。                                       | 使用结构化检查契约；不能只凭历史摘要判断完成。 |
 
-现有代码完成检查的 purpose 名为 `verification`；Hook 作用域与匹配已经显式映射为 `completion`，两种过滤值保持兼容。Embedding 不使用对话上下文装配，其独立 Hooks 与索引签名绑定仍在后续阶段。
+现有代码完成检查的 purpose 名为 `verification`；Hook 作用域与匹配已经显式映射为 `completion`，两种过滤值保持兼容。Embedding 不使用对话上下文装配，已经通过独立挂点接入同一 HookManager，并绑定知识库的冻结索引配置，详见 [Embedding Hooks 与知识库索引](embedding-hooks-v0.1.md)。
 
 <a id="budget"></a>
 

@@ -170,7 +170,9 @@ class HookManager:
             if binding.point != point or instance not in binding.instances:
                 continue
             purposes = binding.purposes
-            if purposes is None and point.startswith("model."):
+            if purposes is None and point.startswith("model.embedding."):
+                purposes = ("document", "query")
+            elif purposes is None and point.startswith("model."):
                 purposes = ("action",)
             if purposes is not None and canonical_purpose(scope.get("purpose")) not in {
                 canonical_purpose(value) for value in purposes

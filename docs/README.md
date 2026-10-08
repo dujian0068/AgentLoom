@@ -20,6 +20,7 @@
 | [上下文与会话记录实现 v0.2](runtime-context-v0.2.md) | ContextManager、连续来源记录、80% / 轮数压缩、恢复前缀、模型发现与查询 API |
 | [统一 Hooks 与用户扩展](hooks-design-v0.1.md)   | 生命周期挂点、模型和工具出入参、扩展契约、隔离执行及恢复                  |
 | [Hooks 运行时使用说明](hooks-runtime-v0.1.md)   | 当前 SDK、可信扩展注册、允许的补丁、发布绑定、恢复与可运行样例             |
+| [Embedding Hooks 与知识库索引](embedding-hooks-v0.1.md) | 文档 / 查询预处理、索引签名、原文保留、重建版本及导入 / 查询恢复 API |
 | [上下文管理](context-management-design-v0.1.md) | 来源记录、模型可见视图、Token 预算、摘要、资源激活、实例隔离与 Hooks 协作 |
 | [运行时事件总线](runtime-event-bus.md)          | 工具请求与响应、注册表、处理器、取消、超时和检查点                        |
 

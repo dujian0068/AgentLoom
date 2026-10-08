@@ -1,8 +1,10 @@
 # Hooks 运行时使用说明 v0.1
 
-更新：2026-10-08。本文描述当前代码接口；完整目标设计见[统一 Hooks 设计](hooks-design-v0.1.md)。
+更新：2026-10-09。本文描述当前代码接口；完整目标设计见[统一 Hooks 设计](hooks-design-v0.1.md)。
 
 **已实现可信 Python Hooks 的注册、版本绑定、有序处理、字段校验、超时、取消和检查点恢复。** 同一个 `HookManager` 注入模型、工具、上下文、运行与子任务边界；Loop 不根据扩展 ID 分支。平台 API 可以绑定部署时注册的可信扩展，发布时冻结版本清单。团队上传 / Git 导入 Hook、管理页面和隔离 Worker 尚未开放。
+
+Embedding 也复用这一机制，由知识库固定处理链，并在文档入库与查询时执行。索引版本、API 和恢复用法见 [Embedding Hooks 与知识库索引](embedding-hooks-v0.1.md)。
 
 ## 1. 模块与职责
 
@@ -13,7 +15,7 @@
 | HookManager | `hooks/manager.py` | 冻结绑定、匹配作用域、稳定排序、逐次校验补丁、保存管道进度。 |
 | HookExecutor | `hooks/executor.py` | 执行可信函数，限制单次时间，传播取消并关闭残留任务。 |
 | execute_operation | `hooks/operation.py` | 包围真实动作，区分最终输入、真实结果和有效视图，管理错误与清理。 |
-| 执行边界 | `model_hooks.py`、`tool_runtime.py`、`hooked_context.py`、`lifecycle_hooks.py` | 提供业务载荷，执行不可绕过的授权、协议与预算校验；运行生命周期独立于 Loop。 |
+| 执行边界 | `model_hooks.py`、`embedding_hooks.py`、`tool_runtime.py`、`hooked_context.py`、`lifecycle_hooks.py` | 提供业务载荷，执行不可绕过的授权、协议与预算校验；运行生命周期独立于 Loop。 |
 
 `EventBus.subscribe` 仍是观察通知。改变参数或阻止动作必须使用 Hooks；观察者不会变成执行拦截器。
 
@@ -125,6 +127,8 @@ PYTHONPATH=apps/api:packages/runtime:. .venv/bin/uvicorn trusted_api:app --host 
 | --- | --- |
 | `model.chat.before` | `Continue`、`Reject`，或修改追加的 user 文本、`temperature`、`top_p`、`max_tokens`。原有消息、模型绑定、tools / Schema、purpose 受保护；输出上限不能超过发布预算。 |
 | `model.chat.after` | 只修改 `content` 和 `annotations`；tool_calls、用量和真实状态保持原值，最后再次验证模型协议。 |
+| `model.embedding.before` | 只修改带固定索引的 `texts`，或 `Reject`；条数、索引位置、模型与索引签名受保护。绑定由知识库固定。 |
+| `model.embedding.after` | 只读向量、数量 / 维度、用量及请求标识，需要 `observation=True`；真实响应先保存，完成校验后才进入观察阶段。 |
 | `tool.before` | 只修改 `arguments`，或 `Reject`。每次修改以及实际执行前均验证 Schema 与授权；具体 Handler 继续检查路径等限制。 |
 | `tool.after` | 只修改 `value` 和 `annotations`。真实成功 / 失败、调用身份和 `evidence_arguments` 不可改写。 |
 | `context.prepare.before` | 添加 `additional_messages`（user 文本），或 `Reject`。附加材料只进入本次请求，并带扩展来源提示；不自动追加到永久对话。 |
@@ -146,7 +150,7 @@ PYTHONPATH=apps/api:packages/runtime:. .venv/bin/uvicorn trusted_api:app --host 
 - `priority` 越小越先执行，同优先级按传入绑定的顺序执行；各阶段各自排序。
 - `binding_id` 必须唯一。同一扩展需要运行两次时，显式创建两个绑定。
 - `instances=("main", "child")` 默认覆盖主任务与子任务。子任务使用自己的 `instance_id`、资源和工作区授权。
-- `purposes` 筛选 `action`、`compaction`、`completion`；内部既有 `verification` 显式映射为 `completion`。模型挂点不填 purposes 时只匹配 `action`，防止回答改写污染压缩摘要或完成检查 JSON。
+- Chat 的 `purposes` 筛选 `action`、`compaction`、`completion`；内部既有 `verification` 显式映射为 `completion`。Chat 挂点不填 purposes 时只匹配 `action`，防止回答改写污染压缩摘要或完成检查 JSON。Embedding 默认匹配 `document` 与 `query`，通过知识库管理绑定，不继承 Agent 的业务 Hook。
 - `targets` 筛选边界的稳定目标：工具为 tool_id，模型为 model_id。配置字段按扩展的 JSON Schema 验证。
 - `timeout` 单位为秒，默认 1 秒；`HookManager.total_timeout` 默认每阶段管道 10 秒。可信函数仍需遵循异步协作式取消，进程内执行不提供恶意代码隔离。
 - `failure_policy="block"` 是默认值。只有声明 `observation=True` 的观察扩展可以选 `continue`；观察扩展只能返回 `Continue`。错误 / 清理阶段的普通 Hook 异常仅形成诊断，不替换原始失败。
@@ -177,7 +181,6 @@ PYTHONPATH=apps/api:packages/runtime:. .venv/bin/uvicorn trusted_api:app --host 
 
 - Hook 包上传 / Git 导入、依赖安装、团队管理页面，以及 Agent 草稿中的可视化绑定。当前已有可信扩展的 API 绑定与发布清单。
 - 隔离 Hook Worker，以及面向不受信任代码的文件 / 网络 / 内存限制。
-- Embedding 前后挂点及与知识库索引版本共同冻结的预处理链。
 - 完整 ContextBlock 授权和来源清单、任意可选消息改写、暂停 / 短路 / around 执行。
 - 跨机器租约、幂等外部事务、大载荷不可变存储引用与完整审计页面。
 

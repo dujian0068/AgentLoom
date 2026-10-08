@@ -1,7 +1,6 @@
 """Chat Completions adapter shared by DeepSeek/OpenAI compatible connections."""
 
 import asyncio
-import math
 
 import httpx
 
@@ -105,26 +104,30 @@ async def chat(model, messages, tools, secret):
         raise RuntimeError("模型响应缺少有效回答或工具调用，请检查模型协议兼容性") from None
 
 
+async def embedding_response(model, texts, secret, *, dimensions=None):
+    """Return selected provider facts before validation by the durable boundary."""
+    if dimensions is None:
+        dimensions = model.get("embedding_dimensions")
+    if dimensions is not None and (type(dimensions) is not int or dimensions <= 0):
+        raise ValueError("Embedding dimensions must be a positive integer")
+    payload = {"model": model["model_id"], "input": texts, "encoding_format": "float"}
+    if dimensions is not None:
+        payload["dimensions"] = dimensions
+    data = await request(model, "/embeddings", payload, secret)
+    records = data.get("data")
+    if not isinstance(records, list) or any(not isinstance(item, dict) for item in records):
+        return {"invalid_response": "embedding_records_must_be_objects"}
+    return {
+        "indices": [item.get("index") for item in records],
+        "vectors": [item.get("embedding") for item in records],
+        **({"usage": data["usage"]} if "usage" in data else {}),
+        **({"provider_request_id": data["id"]} if "id" in data else {}),
+    }
+
+
 async def embeddings(model, texts, secret):
-    data = await request(model, "/embeddings", {"model": model["model_id"], "input": texts}, secret)
-    try:
-        records = sorted(data["data"], key=lambda item: item["index"])
-        if [item["index"] for item in records] != list(range(len(texts))):
-            raise ValueError()
-        vectors = [item["embedding"] for item in records]
-        dimension = len(vectors[0]) if vectors else 0
-        if not dimension:
-            raise ValueError()
-        for vector in vectors:
-            if not isinstance(vector, list) or len(vector) != dimension:
-                raise ValueError()
-            if any(
-                isinstance(value, bool)
-                or not isinstance(value, (int, float))
-                or not math.isfinite(value)
-                for value in vector
-            ):
-                raise ValueError()
-        return vectors
-    except (KeyError, TypeError, ValueError):
-        raise RuntimeError("向量响应的数量、索引或维度不合法") from None
+    """Compatibility adapter for callers that only need ordered vectors."""
+    from .embedding_hooks import normalize_embedding_response
+
+    response = await embedding_response(model, texts, secret)
+    return normalize_embedding_response(response, len(texts))["vectors"]

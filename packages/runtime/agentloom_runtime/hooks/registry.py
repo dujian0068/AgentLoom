@@ -147,6 +147,8 @@ def builtin_points():
             "model.chat.before", "before", ("messages", "temperature", "top_p", "max_tokens"), True
         ),
         HookPoint("model.chat.after", "after", ("content", "annotations")),
+        HookPoint("model.embedding.before", "before", ("texts",), True),
+        HookPoint("model.embedding.after", "after", observation_only=True),
         HookPoint("tool.before", "before", ("arguments",), True),
         HookPoint("tool.after", "after", ("value", "annotations")),
         HookPoint("context.prepare.before", "before", ("additional_messages",), True),
@@ -189,6 +191,36 @@ def builtin_points():
             "finish_reason": nullable_string,
             "provider_request_id": nullable_string,
             **annotations,
+        },
+        "model.embedding.before": {
+            "texts": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                    "type": "object",
+                    "required": ["index", "text"],
+                    "additionalProperties": False,
+                    "properties": {
+                        "index": {"type": "integer", "minimum": 0},
+                        "text": {"type": "string", "minLength": 1},
+                    },
+                },
+            },
+            "model_id": string,
+            "index_signature": string,
+            "dimensions": {"type": ["integer", "null"], "minimum": 1},
+            "encoding_format": {"const": "float"},
+            "purpose": {"enum": ["document", "query"]},
+        },
+        "model.embedding.after": {
+            "vectors": {
+                "type": "array",
+                "items": {"type": "array", "items": {"type": "number"}},
+            },
+            "indices": {"type": "array", "items": {"type": "integer", "minimum": 0}},
+            "dimension": {"type": "integer", "minimum": 1},
+            "usage": nullable_object,
+            "provider_request_id": nullable_string,
         },
         "tool.before": {
             "name": string,

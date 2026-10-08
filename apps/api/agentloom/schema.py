@@ -66,6 +66,12 @@ class AgentConfig(BaseModel):
     subs: list[Child] = Field(default_factory=list, max_length=10)
     hooks: list[HookBindingInput] = Field(default_factory=list, max_length=32)
 
+    @model_validator(mode="after")
+    def validate_hook_scope(self):
+        if any(binding.point.startswith("model.embedding.") for binding in self.hooks):
+            raise ValueError("Embedding Hooks 必须绑定知识库索引，不能由 Agent 覆盖")
+        return self
+
 
 class ModelMetadata(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -125,8 +131,37 @@ class GitInput(BaseModel):
 
 
 class KBInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     name: str = Field(min_length=1, max_length=100)
     embedding_id: str = ""
+    embedding_hooks: list[HookBindingInput] = Field(default_factory=list, max_length=32)
+    embedding_dimensions: int | None = Field(default=None, gt=0, le=65536, strict=True)
+
+    @model_validator(mode="after")
+    def validate_embedding(self):
+        if not self.embedding_id and (
+            self.embedding_hooks or self.embedding_dimensions is not None
+        ):
+            raise ValueError("Embedding Hooks 和维度配置需要绑定向量模型")
+        return self
+
+
+class KBReindexInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    embedding_id: str | None = None
+    embedding_hooks: list[HookBindingInput] | None = Field(default=None, max_length=32)
+    embedding_dimensions: int | None = Field(default=None, gt=0, le=65536, strict=True)
+
+
+class EmbeddingResumeInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    retry_unknown_models: bool = Field(default=False, strict=True)
+
+
+class KBSearchInput(EmbeddingResumeInput):
+    query: str = Field(min_length=1, max_length=1000)
+    embedding_operation_id: str | None = Field(default=None, min_length=1, max_length=200)
 
 
 class RunInput(BaseModel):

@@ -53,7 +53,8 @@ def update_model(rid: str, payload: ModelInput, user=Depends(auth)):
     ):
         raise ValueError("更换供应商或服务地址后，请重新填写 API Key")
     if any(x.get("embedding_id") == rid for x in db.list_resources(user["space_id"], "wiki")) and (
-        payload.model_id != old["model_id"]
+        payload.provider != old["provider"]
+        or payload.model_id != old["model_id"]
         or payload.base_url.rstrip("/") != old["base_url"]
         or payload.purpose != "embedding"
     ):

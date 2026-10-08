@@ -77,6 +77,9 @@ SCOPE_FIELDS = frozenset(
         "target",
         "tool_id",
         "model_id",
+        "kb_id",
+        "index_revision",
+        "index_signature",
     }
 )
 

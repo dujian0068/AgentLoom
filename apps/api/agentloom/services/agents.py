@@ -38,6 +38,8 @@ def snapshot(config, space):
             if kind == "tools" and value["status"] != "ready":
                 raise ValueError("工具尚未就绪：" + value["name"])
             if kind == "wiki":
+                if value.get("rebuild_imports") and value.get("status") != "ready":
+                    raise ValueError("知识库索引重建尚未完成：" + value["name"])
                 value["documents"] = [
                     x["id"]
                     for x in db.query(
