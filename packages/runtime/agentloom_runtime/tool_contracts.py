@@ -72,6 +72,8 @@ class ToolContext:
     citations: CitationRecorder
     invocation: InvocationState
     authorize_tool: Callable[["ToolDefinition"], None] = lambda definition: None
+    # Separate durable namespace for the runtime's operation journal.
+    runtime_state: InvocationState | None = None
 
     def __post_init__(self):
         object.__setattr__(self, "config", readonly(self.config))
@@ -97,6 +99,8 @@ class ToolOutcome:
     value: Any
     status: str
     evidence_arguments: dict = field(default_factory=dict)
+    raw_value: Any = None
+    has_raw_value: bool = False
 
 
 @dataclass(frozen=True)
@@ -112,6 +116,8 @@ class ToolDefinition:
     evidence_fields: tuple[str, ...] = ()
     # Version the implementation and its availability/policy behavior, not just its schema.
     implementation_id: str | None = None
+    # Stable capability identity, independent from model-facing function aliases.
+    tool_id: str | None = None
 
     def model_schema(self):
         return {

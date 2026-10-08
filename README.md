@@ -13,6 +13,7 @@
 | [产品需求 v0.2](docs/requirements-v0.2.md)                    | 平台范围、资源管理、发布与运行、验收标准         |
 | [总体架构 v0.3](docs/architecture-v0.3.md)                    | Runtime 核心、分层、模块职责与执行链路           |
 | [Hooks 设计 v0.1](docs/hooks-design-v0.1.md)                  | 模型与工具出入参、扩展注册、管道、隔离与恢复     |
+| [Hooks 使用说明 v0.1](docs/hooks-runtime-v0.1.md)             | 已实现挂点、Python SDK、发布绑定与失败恢复       |
 | [上下文管理设计 v0.1](docs/context-management-design-v0.1.md) | 上下文装配、预算、压缩、Skill/RAG 与主子任务隔离 |
 | [运行时事件总线](docs/runtime-event-bus.md)                   | 工具请求与结果契约、注册、取消和恢复             |
 | [目录职责规划](docs/directory-plan.md)                        | 目录边界、依赖方向与后续模块拆分                 |
@@ -72,6 +73,7 @@ PostgreSQL 关键词检索使用 GIN 全文索引，支持中文二元词及 SQL
 - 知识库：MD/TXT/SQL 上传、分块、文件引用、中文与英文关键词检索；配置独立 embedding 连接后支持关键词 + 向量融合检索。
 - Agent：主 Agent 的 ReAct/自动 Plan，内嵌子 Agent 配置；子 Agent 不选模型或执行模式，动态处理委派任务。
 - 发布：不可变配置版本；草稿不允许运行。网页和 API 同一引擎，支持会话、SSE 事件、取消、超时、产物下载。
+- Hooks：模型、工具、上下文、主/子任务共用版本化 HookManager；可信 Python 扩展可校验或修改允许的输入输出、阻止执行。真实结果先保存，后处理失败恢复不重复底层调用。上传隔离 Worker 和可视化管理尚待实现。
 
 ## Agent 执行循环
 
@@ -85,11 +87,13 @@ PostgreSQL 关键词检索使用 GIN 全文索引，支持中文二元词及 SQL
 
 模型返回候选回答后，运行时发起完成检查，依据任务目标、计划和工具记录判断 complete / continue / blocked。未完成且可继续时反馈具体缺项，继续执行；存在真实阻碍时进入 needs_input，用户补充信息后继续。检查由同一模型执行，是额外质量控制，不是保证正确的外部裁判；代码测试、文件读回或其他验证仍需要真实工具证据。
 
-历史消息达到约 60000 字符时，按完整工具调用组压缩，保留原任务、当前计划、事实摘要和最近记录。这是保守字符预算，不是供应商精确 token 计数。技能按需读取。网页执行记录展示计划更新、工具失败、完成检查、压缩和子任务结果，不显示内部思维链。
+新配置默认在有效输入预算达到 80% 时主动压缩，也可配置用户轮数或行动次数触发；按完整工具调用组保留原任务、当前计划、摘要和最近记录。当前采用保守 Token 估算；未配置策略的旧发布版本保留约 60000 字符策略。原始消息与模型可见视图分开保存，Hook 的临时附加资料不会自动写入永久历史。技能按需读取。网页执行记录展示计划更新、工具失败、完成检查、压缩和子任务结果，不显示内部思维链。
 
 执行检查点加密保存在当前数据库的 checkpoints 表，包括主/子任务上下文、计划和工具进度；任务文件保存在原工作区。失败、取消、重启中断或等待补充的任务可从“最近任务”选择，再点“继续任务”；恢复仍使用原发布版本。已完成的工具不会自动重跑，执行中中断而结果不明的外部操作会标为未知，要求先观察实际状态，避免盲目重放。仍然不是跨外部服务的 exactly-once 保证。
 
 API：`GET /api/v1/agents/{id}/runs` 查看自己的任务，`POST /api/v1/runs/{id}/resume` 恢复，JSON 为 `{"input":"可选补充信息","stream":true}`。恢复只允许原运行用户，沿用空间鉴权、会话并发和运行限额。没有检查点的历史任务需要重新发起；完成任务不能恢复。恢复保留原任务的上下文；在它之后发起的其他任务不会自动混入该检查点。
+
+模型请求已经发出但未收到结果时，任务返回 `requires_model_retry=true`。核对供应商状态后，网页勾选允许重试，或恢复 API 显式传 `retry_unknown_models: true`；否则返回 409，不重发请求。已经保存真实响应、仅 after Hook 失败的任务不需要这个授权，恢复继续后处理。
 
 ## v0.2 工程与可靠性
 
@@ -128,6 +132,7 @@ packages/runtime/agentloom_runtime/  模型适配、执行引擎、MCP、容器�
 packages/tool-sdk/                Python MCP 工具 SDK
 packages/contracts/              导出的 OpenAPI 契约
 examples/runtime-tools/           通过注册表扩展运行时工具的示例
+examples/hooks/                   无需 Key 的可信 Hooks 接入示例
 examples/skills/report-helper/    可上传的完整技能目录
 examples/tools/text-utils/        可托管的 Python MCP 工具
 apps/web-demo/                   旧交互演示

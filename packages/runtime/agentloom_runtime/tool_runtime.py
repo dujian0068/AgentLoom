@@ -10,6 +10,7 @@ from jsonschema import ValidationError
 from jsonschema.validators import validator_for
 
 from .event_bus import EventBus
+from .hooks import HookError, HookRejected, execute_operation
 from .tool_contracts import (
     TOOL_REQUEST_TOPIC,
     ToolDefinition,
@@ -65,6 +66,10 @@ class ToolRegistry:
             not isinstance(implementation_id, str) or not implementation_id.strip()
         ):
             raise ValueError("工具实现版本不能为空")
+        if definition.tool_id is not None and (
+            not isinstance(definition.tool_id, str) or not definition.tool_id.strip()
+        ):
+            raise ValueError("工具稳定标识不能为空")
         # Callables retain their identity; callers cannot mutate the registered schema.
         definition = replace(
             definition,
@@ -95,6 +100,7 @@ class ToolRegistry:
                 "timeout": definition.timeout,
                 "evidence_fields": list(definition.evidence_fields),
                 "implementation_id": definition.implementation_id,
+                **({"tool_id": definition.tool_id} if definition.tool_id is not None else {}),
             }
             for _, definition in sorted(self._definitions.items())
         ]
@@ -116,7 +122,7 @@ class ToolRegistry:
 
 
 class ToolRuntime:
-    def __init__(self, snapshot, registry=None, bus=None):
+    def __init__(self, snapshot, registry=None, bus=None, *, hooks=None, hook_scope=None):
         self.snapshot = snapshot
         self.registry = (registry or ToolRegistry()).freeze()
         self.bus = bus or EventBus()
@@ -124,6 +130,8 @@ class ToolRuntime:
         self._unregister = self.bus.register(TOOL_REQUEST_TOPIC, self._execute)
         self._closed = False
         self._closing = False
+        self.hooks = hooks
+        self.hook_scope = copy.deepcopy(hook_scope or {})
 
     def definitions(self, config, instance):
         return self.registry.definitions(config, instance)
@@ -185,19 +193,26 @@ class ToolRuntime:
                 raise ValueError("工具参数必须为 JSON 对象")
             self.registry.validate(request.name, arguments)
             evidence = {key: arguments.get(key) for key in definition.evidence_fields}
+            context.authorize_tool(definition)
+            if self.hooks is not None:
+                return await self._execute_with_hooks(
+                    request, context, definition, arguments, trace, event.correlation_id
+                )
             if request.uncertain and not definition.resume_inflight:
                 context.emit("tool.uncertain", trace)
                 raise RuntimeError(
                     "上次调用在执行中中断，结果未知；先检查文件或外部状态，避免重复有副作用的操作"
                 )
-            context.authorize_tool(definition)
             async with asyncio.timeout(definition.timeout):
-                result = await definition.handler(context, arguments)
+                result = await definition.handler(replace(context, runtime_state=None), arguments)
             json.dumps(result, ensure_ascii=False, allow_nan=False)
         except asyncio.CancelledError:
             context.emit("tool.cancelled", trace)
             raise
         except ToolPersistenceError:
+            raise
+        except HookError:
+            # A failed output hook leaves the real result available for recovery.
             raise
         except Exception as exc:
             error = (
@@ -209,6 +224,109 @@ class ToolRuntime:
             return ToolOutcome({"error": error}, "failed", evidence)
         context.emit("tool.completed", {**trace, "result": result})
         return ToolOutcome(result, "succeeded", evidence)
+
+    async def _execute_with_hooks(self, request, context, definition, arguments, trace, request_id):
+        journal = context.runtime_state
+        if journal is None:
+            raise RuntimeError("工具 Hooks 需要宿主提供独立的运行时状态接口")
+        state = journal.get("operation", {})
+        action_unknown = state.get("actual_status") in {"running", "unknown"} and (
+            "raw_output" not in state
+        )
+        if not definition.resume_inflight and ((request.uncertain and not state) or action_unknown):
+            context.emit("tool.uncertain", trace)
+            raise RuntimeError(
+                "上次调用在执行中中断，结果未知；先检查文件或外部状态，避免重复有副作用的操作"
+            )
+        tool_id = definition.tool_id or definition.name
+        payload = {
+            "name": definition.name,
+            "tool_id": tool_id,
+            "implementation_id": definition.implementation_id,
+            "parameters": copy.deepcopy(definition.parameters),
+            "arguments": copy.deepcopy(arguments),
+        }
+        scope = {
+            **self.hook_scope,
+            "operation_id": request_id,
+            "instance_id": context.instance,
+            "purpose": "action",
+            "target": tool_id,
+            "tool_id": tool_id,
+            "call_id": request.call_id,
+        }
+
+        def validate_input(value):
+            # The final authorization is a platform rule, outside the Hook pipeline.
+            current = self.registry.resolve(request.name, context.config, context.instance)
+            context.authorize_tool(current)
+            args = value["arguments"]
+            if not isinstance(args, dict):
+                raise ValueError("工具参数必须为 JSON 对象")
+            self.registry.validate(request.name, args)
+            json.dumps(args, ensure_ascii=False, allow_nan=False)
+
+        def validate_output(value):
+            json.dumps(value, ensure_ascii=False, allow_nan=False)
+            if value.get("status") not in {"succeeded", "failed"}:
+                raise ValueError("工具实际执行状态不合法")
+
+        async def invoke(value):
+            args = copy.deepcopy(value["arguments"])
+            evidence = {key: args.get(key) for key in definition.evidence_fields}
+            try:
+                async with asyncio.timeout(definition.timeout):
+                    result = await definition.handler(replace(context, runtime_state=None), args)
+                json.dumps(result, ensure_ascii=False, allow_nan=False)
+            except (ToolPersistenceError, HookError):
+                raise
+            except Exception as exc:
+                error = (
+                    "工具执行超时，结果可能未确认；请先核对实际状态再决定后续动作"
+                    if isinstance(exc, TimeoutError)
+                    else str(exc)
+                )
+                return {
+                    "value": {"error": error},
+                    "status": "failed",
+                    "evidence_arguments": evidence,
+                }
+            return {"value": result, "status": "succeeded", "evidence_arguments": evidence}
+
+        try:
+            effective = await execute_operation(
+                self.hooks,
+                "tool",
+                payload,
+                invoke,
+                scope=scope,
+                state=state,
+                save=lambda: journal.set("operation", state),
+                validate_input=validate_input,
+                validate_prepared=validate_input,
+                validate_output=validate_output,
+                resume_inflight=definition.resume_inflight,
+            )
+        except HookRejected as exc:
+            # No underlying action happened; the model can choose a permitted alternative.
+            error = str(exc)
+            context.emit("tool.failed", {**trace, "error": error})
+            return ToolOutcome(
+                {"error": error, "code": "hook_rejected", "reason_code": exc.code}, "failed"
+            )
+        raw = state["raw_output"]
+        if raw["status"] == "failed":
+            context.emit("tool.failed", {**trace, "error": raw["value"].get("error", "工具失败")})
+        else:
+            # Observers see the original result; projected model data stays separate.
+            context.emit("tool.completed", {**trace, "result": raw["value"]})
+        return ToolOutcome(
+            effective["value"],
+            raw["status"],
+            copy.deepcopy(raw["evidence_arguments"]),
+            raw_value=copy.deepcopy(raw["value"]),
+            has_raw_value=True,
+        )
 
     async def close(self):
         if self._closed:

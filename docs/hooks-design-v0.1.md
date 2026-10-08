@@ -4,7 +4,7 @@
 
 目标：用户可以读取授权范围内的模型与工具入参、出参，在明确阶段修改数据或阻止执行，并注册自己的扩展。Runtime 提供统一机制，ModelGateway、ToolRuntime 和其他能力模块提供类型明确的挂点。
 
-> **实现状态：** 本文为拟议接口与行为契约，SDK、装饰器、配置字段和执行器尚未实现。现有 EventBus.subscribe 只提供观察通知。本文示例不可直接作为当前平台可用 API 调用。
+> **实现状态（2026-10-08）：** 可信 Python Hooks 的注册 / 绑定、阶段管道、字段校验、超时、取消与检查点恢复已实现，并接入模型、工具、上下文及运行 / 子任务边界。平台 API 支持绑定部署时注册的可信扩展，发布时冻结版本清单。实际 SDK 和已验证范围见[Hooks 运行时使用说明](hooks-runtime-v0.1.md)。本文仍保留完整目标设计；装饰器、Hook 包上传 / Git 导入、管理页面、隔离 Worker 与 Embedding 扩展尚未实现。EventBus.subscribe 仍只提供观察通知。
 
 [返回总体架构与 HookManager](architecture-v0.3.md#hooks)
 
@@ -12,7 +12,7 @@
 
 [![Runtime 内核中的 HookManager、挂点契约、扩展注册、处理管道与执行器](diagrams/agent-runtime-hooks.svg)](diagrams/agent-runtime-hooks.svg)
 
-2026-10-02 更新 · 统一 Hooks 的目标模块与出入参流程，尚待实现。[可缩放 SVG](diagrams/agent-runtime-hooks.svg) · [完整模块架构图](diagrams/abstract-module-architecture.svg)
+2026-10-02 设计图 · 可信运行管道已落地，图中的扩展管理与隔离 Worker 仍是后续阶段。[可缩放 SVG](diagrams/agent-runtime-hooks.svg) · [完整模块架构图](diagrams/abstract-module-architecture.svg)
 
 ### 模型边界 · ModelGateway
 
@@ -105,9 +105,9 @@ PatchInput / PatchOutput 是此前架构中 Patch 的类型化形式。补丁按
 
 ## 5. 用户如何写和绑定扩展
 
-提供 Python Hook SDK。用户编写函数，声明挂点、匹配范围和参数配置；平台导入后生成独立版本。与工具 SDK 类似，但 Hook 接收执行节点数据并返回决策，工具负责实际业务动作。
+已提供可信 Python Hook SDK，通过 `HookDefinition`、`HookBinding` 和 `HookManager` 注册异步函数并注入 Runtime，见[实际 SDK 示例](hooks-runtime-v0.1.md#2-最小接入示例)及[可运行演示](../examples/hooks/demo.py)。Hook 接收执行节点数据并返回决策，工具负责实际业务动作。团队导入包后生成独立版本的管理流程仍是后续目标。
 
-以下为拟议 SDK 示例，不是当前已安装的库或可用装饰器。
+以下保留拟议装饰器语法；当前版本不提供 `@hook` 装饰器，使用上方链接中的显式注册方式。当前载荷为只读映射，使用 `call["arguments"]` / `reply["content"]` 访问。
 
 ```python
 @hook(point="tool.before", target="orders.search")
@@ -126,7 +126,7 @@ async def normalize_answer(ctx, reply):
     return PatchOutput({"content": reply.content.strip()})
 ```
 
-拟议包结构：
+后续上传 / Git 导入所用的拟议包结构：
 
 ```text
 order-hooks/
@@ -196,4 +196,4 @@ model.chat.before / after 默认包围一次**逻辑模型调用**。网关内�
 
 验收重点：顺序稳定、参数修改有效且重校验、返回视图与执行事实分开、模型 tool_calls 协议完整、子任务范围不越权、取消有效、恢复不重复副作用，以及新增扩展无需修改 Loop。
 
-本设计与 Runtime 核心架构配套；落地前不将示例声明为现有功能。
+本设计与 Runtime 核心架构配套；当前实现、可运行示例与后续边界以[Hooks 运行时使用说明](hooks-runtime-v0.1.md)为准。

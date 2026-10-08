@@ -28,6 +28,7 @@ export function useRunWorkspace(options: Options) {
   const conversation = ref<Message[]>([]);
   const session = ref<string | null>(null);
   const activeRun = ref<RunState | null>(null);
+  const retryUnknownModels = ref(false);
   const running = ref(false);
   const events = ref<RunEvent[]>([]);
   const runTab = ref("chat");
@@ -73,6 +74,7 @@ export function useRunWorkspace(options: Options) {
     conversation.value = [];
     session.value = null;
     activeRun.value = null;
+    retryUnknownModels.value = false;
     events.value = [];
     selectedRun.value = "";
     runTab.value = "chat";
@@ -92,6 +94,7 @@ export function useRunWorkspace(options: Options) {
     const row = await api<RunState>("/v1/runs/" + id);
     if (activeRun.value?.id !== id) return;
     activeRun.value = row;
+    retryUnknownModels.value = false;
     events.value = row.events;
     running.value = ["queued", "running"].includes(row.status);
     if (!running.value) {
@@ -180,10 +183,12 @@ export function useRunWorkspace(options: Options) {
         output: "",
         error: null,
         resumable: false,
+        requires_model_retry: false,
         events: [],
         artifacts: [],
       };
       selectedRun.value = result.run_id;
+      retryUnknownModels.value = false;
       question.value = "";
       running.value = true;
       conversation.value.push(
@@ -198,19 +203,27 @@ export function useRunWorkspace(options: Options) {
 
   async function resumeRun() {
     if (!activeRun.value?.resumable || running.value) return;
+    if (activeRun.value.requires_model_retry && !retryUnknownModels.value) {
+      notify("请核对模型请求状态后，明确勾选是否允许重试未确认请求。");
+      return;
+    }
     await action(async () => {
       const id = activeRun.value!.id;
       const text = question.value.trim();
       const result = (await post(`/v1/runs/${id}/resume`, {
         input: text,
         stream: false,
+        retry_unknown_models:
+          activeRun.value!.requires_model_retry && retryUnknownModels.value,
       })) as RunResponse;
       question.value = "";
+      retryUnknownModels.value = false;
       running.value = true;
       activeRun.value = {
         ...activeRun.value!,
         status: "queued",
         resumable: false,
+        requires_model_retry: false,
       };
       conversation.value.push(
         { role: "user", text: text || "继续任务" },
@@ -226,6 +239,7 @@ export function useRunWorkspace(options: Options) {
     await action(async () => {
       const row = await api<RunState>("/v1/runs/" + selectedRun.value);
       activeRun.value = row;
+      retryUnknownModels.value = false;
       session.value = row.session_id;
       conversation.value = conversationFromRun(row);
       events.value = row.events;
@@ -256,6 +270,7 @@ export function useRunWorkspace(options: Options) {
     conversation.value = [];
     events.value = [];
     activeRun.value = null;
+    retryUnknownModels.value = false;
     selectedRun.value = "";
   }
 
@@ -307,6 +322,7 @@ export function useRunWorkspace(options: Options) {
     conversation,
     session,
     activeRun,
+    retryUnknownModels,
     running,
     events,
     runTab,

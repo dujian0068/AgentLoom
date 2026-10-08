@@ -33,6 +33,19 @@ export type Child = {
   tools: string[];
   wiki: string[];
 };
+export type HookBinding = {
+  binding_id: string;
+  hook_id: string;
+  point: string;
+  version?: string | null;
+  priority?: number;
+  timeout?: number;
+  failure_policy?: "block" | "continue";
+  config?: Record<string, unknown>;
+  purposes?: string[] | null;
+  instances?: ("main" | "child")[];
+  targets?: string[];
+};
 export type Agent = {
   id?: string;
   name: string;
@@ -44,6 +57,7 @@ export type Agent = {
   tools: string[];
   wiki: string[];
   subs: Child[];
+  hooks?: HookBinding[];
   published?: number;
 };
 export type AgentDraft = Agent & { context_policy: ContextPolicy };
@@ -76,6 +90,7 @@ export type RunState = {
   error: string | null;
   session_id: string;
   resumable: boolean;
+  requires_model_retry: boolean;
   events: RunEvent[];
   artifacts: string[];
 };

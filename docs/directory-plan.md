@@ -34,7 +34,7 @@
 | `runtime.py`                                   | 根据发布快照和依赖接口组装运行时。                                                                                                            |
 | `engine.py`                                    | 统一执行循环、模型与工具消息、调用进度、预算、继续和完成。                                                                                    |
 | `context.py` / `planning.py` / `completion.py` | 上下文、计划与完成策略。                                                                                                                      |
-| `hooks/`（目标）                               | HookManager、阶段上下文、HookResult、注册顺序、超时/异常和恢复策略；模型、工具、上下文和生命周期扩展。当前只有观察通知，完整 Hooks 尚未实现。 |
+| `hooks/`                                       | 已实现可信 Python HookManager、只读上下文、HookResult、注册顺序、超时/异常和恢复策略；模型、工具、上下文与生命周期使用独立边界模块接入。隔离 Worker 和上传管理仍待实现，见 [Hooks 使用说明](hooks-runtime-v0.1.md)。 |
 | `event_bus.py`                                 | 工具请求/响应、关联 ID、取消/超时、观察通知。                                                                                                 |
 | `tool_contracts.py` / `tool_runtime.py`        | 工具契约、注册表、权限/参数/策略校验。                                                                                                        |
 | `handlers/`                                    | 工作区、Skill、MCP、RAG 查询、计划更新、子任务委派。                                                                                          |

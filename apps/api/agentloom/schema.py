@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -36,6 +36,23 @@ class ContextPolicy(BaseModel):
         return self
 
 
+class HookBindingInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    binding_id: str = Field(min_length=1, max_length=200, pattern=r"^[A-Za-z0-9_.:/-]+$")
+    hook_id: str = Field(min_length=1, max_length=200, pattern=r"^[A-Za-z0-9_.:/-]+$")
+    point: str = Field(min_length=1, max_length=200, pattern=r"^[A-Za-z0-9_.-]+$")
+    version: str | None = Field(default=None, min_length=1, max_length=200)
+    priority: int = Field(default=100, ge=-10000, le=10000, strict=True)
+    timeout: float = Field(default=1.0, gt=0, le=300, strict=True)
+    failure_policy: Literal["block", "continue"] = "block"
+    config: dict[str, Any] = Field(default_factory=dict)
+    purposes: list[str] | None = Field(default=None, max_length=20)
+    instances: list[Literal["main", "child"]] = Field(
+        default_factory=lambda: ["main", "child"], min_length=1, max_length=2
+    )
+    targets: list[str] = Field(default_factory=list, max_length=100)
+
+
 class AgentConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str = Field(min_length=1, max_length=100)
@@ -47,6 +64,7 @@ class AgentConfig(BaseModel):
     tools: list[str] = Field(default_factory=list, max_length=30)
     wiki: list[str] = Field(default_factory=list, max_length=20)
     subs: list[Child] = Field(default_factory=list, max_length=10)
+    hooks: list[HookBindingInput] = Field(default_factory=list, max_length=32)
 
 
 class ModelMetadata(BaseModel):
@@ -121,3 +139,4 @@ class RunInput(BaseModel):
 class ResumeInput(BaseModel):
     input: str = Field(default="", max_length=20000)
     stream: bool = False
+    retry_unknown_models: bool = Field(default=False, strict=True)

@@ -6,6 +6,7 @@ from agentloom_runtime.budget import normalized_profile
 from fastapi import HTTPException
 
 from agentloom import store as db
+from agentloom.services.hooks import published_hook_manifest
 
 
 def get_agent(aid, space):
@@ -22,7 +23,11 @@ def snapshot(config, space):
     if "context_policy" in config:
         # Freeze effective defaults when reusing a model created before budgets existed.
         model.update(normalized_profile(model))
-    result = {"config": config, "model_obj": model}
+    result = {
+        "config": config,
+        "model_obj": model,
+        "hook_manifest": published_hook_manifest(config),
+    }
     for kind in ("skills", "tools", "wiki"):
         ids = set(config[kind])
         for child in config["subs"]:

@@ -414,6 +414,45 @@
         }
       }
     },
+    "/api/models/discover": {
+      "post": {
+        "tags": [
+          "models"
+        ],
+        "summary": "Discover Models",
+        "operationId": "discover_models_api_models_discover_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModelDiscoveryInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/models": {
       "post": {
         "tags": [
@@ -1746,6 +1785,82 @@
           }
         }
       }
+    },
+    "/api/v1/sessions/{sid}/messages": {
+      "get": {
+        "tags": [
+          "runs"
+        ],
+        "summary": "Session Messages",
+        "operationId": "session_messages_api_v1_sessions__sid__messages_get",
+        "parameters": [
+          {
+            "name": "sid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Sid"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "After"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 100,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "instance",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Instance"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1778,6 +1893,9 @@
             "title": "Mode",
             "default": "react"
           },
+          "context_policy": {
+            "$ref": "#/components/schemas/ContextPolicy"
+          },
           "skills": {
             "items": {
               "type": "string"
@@ -1809,6 +1927,14 @@
             "type": "array",
             "maxItems": 10,
             "title": "Subs"
+          },
+          "hooks": {
+            "items": {
+              "$ref": "#/components/schemas/HookBindingInput"
+            },
+            "type": "array",
+            "maxItems": 32,
+            "title": "Hooks"
           }
         },
         "additionalProperties": false,
@@ -1932,6 +2058,58 @@
         ],
         "title": "Child"
       },
+      "ContextPolicy": {
+        "properties": {
+          "context_ratio": {
+            "type": "number",
+            "maximum": 1.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Context Ratio",
+            "default": 0.8
+          },
+          "target_ratio": {
+            "type": "number",
+            "exclusiveMaximum": 1.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Target Ratio",
+            "default": 0.6
+          },
+          "user_turns": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Turns"
+          },
+          "model_steps": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Steps"
+          },
+          "max_compaction_calls": {
+            "type": "integer",
+            "maximum": 16.0,
+            "minimum": 1.0,
+            "title": "Max Compaction Calls",
+            "default": 4
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "ContextPolicy"
+      },
       "GitInput": {
         "properties": {
           "url": {
@@ -1972,6 +2150,116 @@
         },
         "type": "object",
         "title": "HTTPValidationError"
+      },
+      "HookBindingInput": {
+        "properties": {
+          "binding_id": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.:/-]+$",
+            "title": "Binding Id"
+          },
+          "hook_id": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.:/-]+$",
+            "title": "Hook Id"
+          },
+          "point": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.-]+$",
+            "title": "Point"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          },
+          "priority": {
+            "type": "integer",
+            "maximum": 10000.0,
+            "minimum": -10000.0,
+            "title": "Priority",
+            "default": 100
+          },
+          "timeout": {
+            "type": "number",
+            "maximum": 300.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Timeout",
+            "default": 1.0
+          },
+          "failure_policy": {
+            "type": "string",
+            "enum": [
+              "block",
+              "continue"
+            ],
+            "title": "Failure Policy",
+            "default": "block"
+          },
+          "config": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Config"
+          },
+          "purposes": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "maxItems": 20
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Purposes"
+          },
+          "instances": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "main",
+                "child"
+              ]
+            },
+            "type": "array",
+            "maxItems": 2,
+            "minItems": 1,
+            "title": "Instances"
+          },
+          "targets": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 100,
+            "title": "Targets"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "binding_id",
+          "hook_id",
+          "point"
+        ],
+        "title": "HookBindingInput"
       },
       "KBInput": {
         "properties": {
@@ -2026,6 +2314,48 @@
         ],
         "title": "Login"
       },
+      "ModelDiscoveryInput": {
+        "properties": {
+          "provider": {
+            "type": "string",
+            "enum": [
+              "deepseek",
+              "openai"
+            ],
+            "title": "Provider"
+          },
+          "base_url": {
+            "type": "string",
+            "maxLength": 1000,
+            "title": "Base Url"
+          },
+          "api_key": {
+            "type": "string",
+            "maxLength": 500,
+            "title": "Api Key",
+            "default": ""
+          },
+          "resource_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resource Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "provider",
+          "base_url"
+        ],
+        "title": "ModelDiscoveryInput"
+      },
       "ModelInput": {
         "properties": {
           "name": {
@@ -2066,6 +2396,27 @@
             ],
             "title": "Purpose",
             "default": "chat"
+          },
+          "context_window": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Context Window",
+            "default": 32768
+          },
+          "max_output_tokens": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Max Output Tokens",
+            "default": 4096
+          },
+          "safety_margin_tokens": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Safety Margin Tokens",
+            "default": 1024
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/ModelMetadata"
           }
         },
         "type": "object",
@@ -2076,6 +2427,59 @@
           "base_url"
         ],
         "title": "ModelInput"
+      },
+      "ModelMetadata": {
+        "properties": {
+          "source": {
+            "type": "string",
+            "enum": [
+              "manual",
+              "provider",
+              "official_manifest",
+              "platform_default"
+            ],
+            "title": "Source",
+            "default": "manual"
+          },
+          "source_url": {
+            "type": "string",
+            "maxLength": 500,
+            "title": "Source Url",
+            "default": ""
+          },
+          "verified_at": {
+            "type": "string",
+            "maxLength": 32,
+            "title": "Verified At",
+            "default": ""
+          },
+          "provider_max_output_tokens": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Max Output Tokens"
+          },
+          "chat_compatible": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chat Compatible"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "ModelMetadata"
       },
       "ResumeInput": {
         "properties": {
@@ -2088,6 +2492,11 @@
           "stream": {
             "type": "boolean",
             "title": "Stream",
+            "default": false
+          },
+          "retry_unknown_models": {
+            "type": "boolean",
+            "title": "Retry Unknown Models",
             "default": false
           }
         },

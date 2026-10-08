@@ -341,7 +341,7 @@ def test_child_action_counts_stay_local_and_survive_interrupted_resume(tmp_path)
 
     gateway = InterruptedGateway(resume=True)
     resumed = runtime(gateway, checkpoint)
-    resumed.resume()
+    resumed.resume(retry_unknown_models=True)
     assert resumed.state["frames"]["main"]["context"]["model_steps"] == 10
     assert resumed.state["frames"]["sub-1"]["context"]["model_steps"] == 1
     assert asyncio.run(resumed.execute("main task")) == "main done"

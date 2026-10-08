@@ -24,6 +24,7 @@ def definition(service, spec, decrypt):
         parameters=spec["schema"],
         handler=invoke,
         available=lambda config, instance: service["id"] in config["tools"],
+        tool_id=f"mcp:{service['id']}:{spec['name']}",
     )
 
 

@@ -12,6 +12,7 @@ class ModelRequest:
     tools: list[dict]
     purpose: str = "action"
     instance: str = "main"
+    options: dict = field(default_factory=dict)
 
 
 class ModelGateway(Protocol):
@@ -37,6 +38,9 @@ class ContextInput:
 class CompactionResult:
     messages: list[dict]
     metrics: dict = field(default_factory=dict)
+    # An explicit text slot allows output hooks to edit only generated summary
+    # prose. Message identity, surrounding task/plan text and coverage stay fixed.
+    summary: dict | None = None
 
 
 class CompactionPolicy(Protocol):

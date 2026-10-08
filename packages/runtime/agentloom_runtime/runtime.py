@@ -9,6 +9,7 @@ from .context_manager import JournalContextManager
 from .engine import Engine
 from .execution_strategy import PlanStrategy, ReactStrategy
 from .handlers import register_builtins
+from .hooks import HookManager
 from .model_gateway import ProviderModelGateway
 from .module_contracts import ExecutionLimits
 from .modules import RuntimeModules
@@ -32,8 +33,18 @@ def create_engine(
     limits=None,
     registry=None,
     context_manager=None,
+    hooks=None,
+    hook_scope=None,
 ):
     snapshot = deepcopy(snapshot)
+    if snapshot["config"].get("hooks") and hooks is None:
+        raise ValueError("已配置 Hooks 的发布版本必须显式解析可信 Hook 注册表")
+    hooks = hooks if hooks is not None else HookManager()
+    if "hook_manifest" in snapshot and snapshot["hook_manifest"] != {
+        "module_id": hooks.module_id,
+        "config": hooks.checkpoint_config(),
+    }:
+        raise ValueError("已发布 Hook 版本、代码或配置发生变化，不能使用此版本运行")
     if "context_policy" in snapshot["config"]:
         snapshot["model_obj"].update(normalized_profile(snapshot["model_obj"]))
     if (
@@ -61,6 +72,7 @@ def create_engine(
         else (PlanStrategy() if snapshot["config"]["mode"] == "plan" else ReactStrategy()),
         limits=limits if limits is not None else ExecutionLimits(),
         context=context_manager if context_manager is not None else JournalContextManager(),
+        hooks=hooks,
     )
     modules.bindings()  # Validate the durable contract before registering handlers.
     if registry is None:
@@ -69,7 +81,7 @@ def create_engine(
             register_builtins(registry, snapshot, decrypt=decrypt, search=search)
     if configure_tools is not None:
         configure_tools(registry)
-    tools = ToolRuntime(snapshot, registry=registry)
+    tools = ToolRuntime(snapshot, registry=registry, hooks=modules.hooks, hook_scope=hook_scope)
     return Engine(
         snapshot["config"],
         workspace,
@@ -79,4 +91,6 @@ def create_engine(
         tools=tools,
         modules=modules,
         model_id=snapshot["model_obj"]["model_id"],
+        hook_scope=hook_scope,
+        max_output_tokens=snapshot["model_obj"].get("max_output_tokens"),
     )

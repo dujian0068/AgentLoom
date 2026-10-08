@@ -6,7 +6,7 @@ AGENTLOOM / ARCHITECTURE
 
 采用模块化单体：一个 Vue 工作台、一个 Python 服务、一个 PostgreSQL 数据库。内部明确管理配置、任务运行、能力执行和持久化边界，再按实际规模拆分部署。
 
-> **文档口径：** “现有”表示已在代码中找到；“目标 / 建议”表示下一阶段边界。模块化接口见[Runtime 模块化实现 v0.1](runtime-modularity-v0.1.md)。后续已增加可注入 ContextManager、连续会话来源和可复用视图、80% / 轮数主动压缩及模型发现，见[上下文实现 v0.2](runtime-context-v0.2.md)。Token 数为保守估计，完整类型化来源、Memory 与统一 HookManager 仍待实现；下方图继续表达目标分层。
+> **文档口径：** “现有”表示已在代码中找到；“目标 / 建议”表示下一阶段边界。模块化接口见[Runtime 模块化实现 v0.1](runtime-modularity-v0.1.md)。后续已增加可注入 ContextManager、连续会话来源和可复用视图、80% / 轮数主动压缩及模型发现，见[上下文实现 v0.2](runtime-context-v0.2.md)。2026-10-08 已接入可信统一 Hooks，见[运行时使用说明](hooks-runtime-v0.1.md)。Token 数为保守估计，完整类型化来源、Memory、Hook 管理页面与隔离 Worker 仍待实现；下方图继续表达目标分层。
 
 - [总体框架](#overview)
 - [六层职责](#layers)
@@ -30,7 +30,7 @@ AGENTLOOM / ARCHITECTURE
 
 [![AgentLoom 以内核为中心的抽象模块架构：Runtime 包含 HookManager，管理控制面位于侧边，运行服务负责承载实例](diagrams/abstract-module-architecture.svg)](diagrams/abstract-module-architecture.svg)
 
-图 1 · 以 Agent Runtime 为核心的目标模块架构。2026-10-02 补充挂点契约、扩展注册、处理管道、执行器，以及扩展发布与隔离 Worker；模型和工具边界共用 HookManager。完整 Hooks 尚待实现，独立模块状态见下文。[可缩放 SVG](diagrams/abstract-module-architecture.svg)
+图 1 · 以 Agent Runtime 为核心的目标模块架构。2026-10-02 补充挂点契约、扩展注册、处理管道、执行器，以及扩展发布与隔离 Worker；模型和工具边界共用 HookManager。可信 Hooks 运行机制已实现，扩展管理与隔离 Worker 尚待实现，独立模块状态见下文。[可缩放 SVG](diagrams/abstract-module-architecture.svg)
 
 ### 配置管理
 
@@ -95,7 +95,7 @@ AGENTLOOM / ARCHITECTURE
 | ModelConnectionService | DeepSeek/OpenAI 连接配置、模型 ID、聊天/embedding 用途、连接测试与凭据轮换。              | 模型配置 + 凭据引用。                | 已有管理接口；目标是所有供应商凭据经 SecretStore 解析。                       |
 | SkillService           | 文件夹/Git 导入、SKILL.md 解析、目录和附件管理、依赖与兼容信息、版本。                    | 指定版本的 Skill 元数据与包引用。    | 已有目录导入和按需加载；完整不可变资源版本与宿主兼容矩阵待补齐。              |
 | ToolService            | 外部 MCP 接入、工具发现/测试、托管 Python 工具导入与构建、schema 和服务状态。             | 可发布的工具服务版本与工具目录。     | 已有 HTTP/SSE 与 Docker stdio 路径；容器能力仍待实际环境验证。                |
-| HookExtensionService   | 导入扩展包、声明权限、样例测试、发布版本、绑定 Agent 或能力；运行时读取冻结的发布绑定。   | 扩展版本、配置与绑定快照。           | 目标模块，尚未实现；执行机制归属 Runtime 的 HookManager。                     |
+| HookExtensionService   | 导入扩展包、声明权限、样例测试、发布版本、绑定 Agent 或能力；运行时读取冻结的发布绑定。   | 扩展版本、配置与绑定快照。           | 已有部署时可信注册、API 绑定与发布清单验证；上传、管理页面与隔离 Worker 仍待实现。执行机制归属 Runtime 的 HookManager。 |
 | KnowledgeService       | MD/TXT/SQL 上传、解析分块、向量化和关键词索引、文档状态与索引版本。                       | 可检索资料集及索引修订。             | 入库与检索目前都在 knowledge.py，建议拆成 IngestionService 与 Retriever。     |
 | AgentService           | 主 Agent 草稿、Prompt、模型与策略、资源绑定、内嵌子 Agent 配置。                          | 经过结构校验的 AgentConfig。         | 已有，保存逻辑部分位于路由。                                                  |
 | ReleaseService         | 校验依赖资源、解析修订、生成发布快照、发布版本编号与历史。                                | AgentVersion / RuntimeSpec。         | 快照构建已有，发布事务仍在 routes/agents.py；资源物理版本未完全冻结。         |
@@ -113,8 +113,8 @@ AGENTLOOM / ARCHITECTURE
 | ----------------- | ------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------- |
 | RuntimeFactory    | 接收发布快照及依赖接口，组装 Loop、注册表、总线和处理器。                                  | `create_engine()` 注入 RuntimeModules、工具注册表和运行预算；完整 RuntimeSpec 仍待类型化。                                                    |
 | Loop / Engine     | 区分模型回答和 tool_calls，维护轮次与 pending 调用，将工具结果回填对话，决定下一轮或结束。 | `engine.py`；已经去掉具体工具执行分支。                                                                         |
-| HookManager       | 在明确生命周期节点按顺序调用扩展；管理允许的修改、拦截、超时、异常与恢复语义。             | **目标模块，尚未实现。** 现有 EventBus.subscribe 是观察通知，尚不具备完整可等待、可修改、可拦截的 Hooks 契约。  |
-| ModelGateway      | 统一模型请求与响应、凭据解析、限流和用量记录，对接不同供应商适配器。                       | `ModelGateway` Protocol 与 `ProviderModelGateway` 已实现；Engine 不再导入 provider 或持有模型解密回调。统一限流、完整用量及 Hooks 待补齐。       |
+| HookManager       | 在明确生命周期节点按顺序调用扩展；管理允许的修改、拦截、超时、异常与恢复语义。             | 已实现可信 Python Hook 契约、注册 / 绑定、管道、执行器、检查点与恢复，接入模型 / 工具 / 上下文 / 运行与子任务；上传隔离及管理端待实现。 |
+| ModelGateway      | 统一模型请求与响应、凭据解析、限流和用量记录，对接不同供应商适配器。                       | `ModelGateway` Protocol 与 `ProviderModelGateway` 已实现；统一模型 Hook 边界已接入。Engine 不再导入 provider 或持有模型解密回调，统一限流仍待完善。 |
 | ContextManager    | 管理实例内跨 Loop 上下文、会话历史继承、Token 预算与来源；按配置主动压缩完整交互组。 | `JournalContextManager`、预算策略与连续会话来源 / 视图已落地；新发布配置采用 80% / 轮数触发，旧无策略版本保留字符策略。见[当前实现](runtime-context-v0.2.md)。 |
 | PlanManager       | 保存和调整计划及步骤状态；Plan 要求先计划再自动执行。                                      | `planning.py` 校验计划，handler 通过受限 PlanEditor 更新；format=1 状态仍由宿主适配器持有。                                                       |
 | CompletionPolicy  | 依据目标、执行证据与未完成计划判断 complete / continue / blocked。                         | `CompletionPolicy` Protocol 与默认 `EvidenceCompletionPolicy` 已可注入；默认仍调用同一模型检查，不能替代真实工具验证。                                                 |
@@ -128,7 +128,7 @@ AGENTLOOM / ARCHITECTURE
 
 `user_turns` 每个新提问 / 新 Run 计一次，补充、恢复与重试不另计；`model_steps` 只计有效持久化的 `action` 模型响应，压缩、完成检查及子实例响应不增加父计数。基线取最近成功压缩时的观测水位，通过历史快照和检查点继承、恢复，不能按新 Run 或恢复重置，也不能用可重置的 ExecutionPolicy 调用预算替代。子实例计数独立；压缩仅覆盖完整已完成组并保留当前任务及有效约束，无可压缩组则延后，失败不推进基线。
 
-管理端已提供 Agent 压缩比例 / 轮数配置及模型发现与预算，发布快照冻结有效配置。action、compaction、verification 请求在进入模型网关前校验硬预算；统一 Hook 尚未实现，未来仍须在 Hook 后重检。规则与限制见[上下文实现 v0.2](runtime-context-v0.2.md)，完整目标契约见[主动压缩设计](context-management-design-v0.1.md#budget)。
+管理端已提供 Agent 压缩比例 / 轮数配置及模型发现与预算，发布快照冻结有效配置。action、compaction、verification 请求在进入模型网关前校验硬预算；已接入统一 Hook，并在输入修改后重新校验，禁止通过 Hook 绕过预算。规则与限制见[上下文实现 v0.2](runtime-context-v0.2.md)与[Hooks 运行时](hooks-runtime-v0.1.md)，完整目标契约见[主动压缩设计](context-management-design-v0.1.md#budget)。
 
 <a id="hooks"></a>
 
@@ -138,11 +138,11 @@ AGENTLOOM / ARCHITECTURE
 
 [![Agent Runtime 核心模块、统一 HookManager 及挂点契约、扩展注册、有序管道、隔离执行器](diagrams/agent-runtime-hooks.svg)](diagrams/agent-runtime-hooks.svg)
 
-Runtime 局部图：注册表提供契约与绑定，HookManager 经 Pipeline 和 Executor 执行扩展；模型与工具共享机制，真实结果与加工输出独立保存。完整 Hooks 尚待实现。[可缩放 SVG](diagrams/agent-runtime-hooks.svg)
+Runtime 局部图：注册表提供契约与绑定，HookManager 经 Pipeline 和 Executor 执行扩展；模型与工具共享机制，真实结果与加工输出独立保存。可信运行管道已实现；图中的隔离 Worker 与管理流程仍是目标。[可缩放 SVG](diagrams/agent-runtime-hooks.svg)
 
 Hooks 直接参与执行流程，调用方需要等待 HookResult，再决定继续、应用修改或阻止当前阶段。HookManager 归属 Runtime；Loop、模型调用包装器、上下文管理器、工具分发器和子任务管理器在各自边界调用它。管理端后续可以管理 Hook 配置，但 Hook 执行机制属于运行内核。
 
-> **当前状态：** 这一节定义目标契约。现有代码有事件观察者、固定校验和 emit/save 回调，还没有统一 HookManager、HookResult 或完整生命周期 Hooks；本次不将文档设计标记为代码已实现。
+> **当前状态（2026-10-08）：** 统一 HookManager、显式 HookResult、可信执行管道及主要运行边界已实现。下面仍描述总体目标，具体挂点白名单、恢复规则、Python SDK 和剩余范围见[Hooks 运行时使用说明](hooks-runtime-v0.1.md)。团队代码的隔离执行、上传管理与 Embedding 挂点仍待实现。
 
 | 生命周期       | 建议 Hook 点                                              | 允许的作用                                                                                                                                      |
 | -------------- | --------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -168,7 +168,7 @@ Loop 提交工具请求
   → ToolOutcome 经总线返回 Loop
 ```
 
-**执行规则：** before、after、error、finally 各阶段按发布版本固定的优先级和绑定顺序执行；后一个 Hook 看到前一个通过校验的修改。挂点注册表提供 Schema 与允许动作，扩展注册表提供版本与绑定，实际执行由 HookManager → HookPipeline → HookExecutor 完成。可信内置函数可在进程内执行，团队上传或 Git 导入的代码由隔离 Worker 执行。Hook 有独立超时，也计入总运行预算。关键策略 Hook 出错或超时应阻断当前阶段，纯观测扩展可以记录错误后继续；这项策略由平台确定，不能由模型决定。
+**执行规则：** before、after、error、finally 各阶段按发布版本固定的优先级和绑定顺序执行；后一个 Hook 看到前一个通过校验的修改。挂点注册表提供 Schema 与允许动作，扩展注册表提供版本与绑定，实际执行由 HookManager 内的管道与 HookExecutor 完成。当前只开放进程内可信函数；团队上传或 Git 导入代码经隔离 Worker 执行是后续目标。Hook 有独立超时和阶段总预算。关键策略 Hook 出错或超时应阻断当前阶段，纯观测扩展可以记录错误后继续；这项策略由平台确定，不能由模型决定。
 
 **恢复规则：** 检查点记录 Hook 配置版本、阶段、必要扩展状态和工具是否实际发起。恢复时依据已保存阶段继续；若工具已完成而 after_tool 失败，应保留真实结果，不能为重跑后置 Hook 再执行工具。对于执行中中断、结果未知的 Hook，也必须区分可重算的数据转换与外部副作用，不能承诺自动安全重放。取消后的清理 Hook 有短时限，不能吞掉取消继续任务。
 
@@ -228,7 +228,7 @@ Handler：使用具体能力
 | RuntimeSpec                         | 已解析发布版本、模型与资源修订、子配置、执行策略。                       | 当前为 snapshot 字典，目标改为类型化对象。                |
 | ExecutionContext                    | 平台注入的 space/user/run/instance、工作区、授权范围、取消与存储接口。   | ToolContext 已移除公开共享状态，改为受限能力接口和深只读 config；仍为进程内契约。 |
 | ToolRequest / ToolOutcome           | 调用名与参数、调用 ID、结果与状态；后续明确错误码和未知结果语义。        | 已有 dataclass；request_id 由总线 Event 携带。            |
-| HookSpec / HookContext / HookResult | 固定版本的扩展声明、只读阶段上下文、Continue/Patch/Reject 及字段白名单。 | 本轮架构新增；待实现与验证。                              |
+| HookDefinition / HookBinding / HookContext / HookResult | 固定版本的扩展声明、只读阶段上下文、Continue / PatchInput / PatchOutput / Reject 及字段白名单。 | 已实现可信 Python SDK 与运行管道；Hook 包管理与隔离执行仍待实现。 |
 | RunEvent                            | 事件类型、顺序号、run/instance/request/call 关联、必要且脱敏的 payload。 | 数据库顺序号与 SSE 已有；完整类型化事件 schema 待补齐。   |
 | Checkpoint                          | 检查点格式版本、消息、计划、pending 边界、处理器状态和子实例。           | 已有加密保存与旧格式兼容；后续增加显式 schema 迁移。      |
 
@@ -327,7 +327,7 @@ packages/runtime/agentloom_runtime/
   engine.py                      统一循环
   context.py / planning.py / completion.py
   ports.py                       模型、存储、子任务等接口（目标）
-  hooks/                         生命周期契约、HookManager、执行与恢复策略（目标）
+  hooks/                         生命周期契约、HookManager、可信执行与恢复策略（已实现）
   event_bus.py / tool_contracts.py / tool_runtime.py
   handlers/                      独立能力处理器
   adapters/                      provider、MCP、Sandbox 适配（目标）
@@ -347,7 +347,7 @@ API 应用依赖 Runtime 公共入口；Runtime 不反向导入 API。模型、R
 | 顺序                       | 实现内容                                                                                                        | 可验证的完成条件                                                                                                                |
 | -------------------------- | --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
 | 1 · 收拢业务入口           | 抽完整 RunService / ReleaseService；路由只处理请求响应；按领域补仓储接口。                                      | 网页与 API 共用发布/运行规则；路由不直接创建任务或写发布 SQL。                                                                  |
-| 2 · 收敛 Runtime 依赖      | 已有 ModelGateway、策略注入及受限 ToolContext；继续补 CheckpointStore、EventSink、统一 HookManager 与独立状态模块。 | Runtime 可在无 FastAPI/真实数据库环境测试；换模型适配器或添加工具无需修改 Loop；Hook 修改经过重校验，取消与恢复不重复外部动作。 |
+| 2 · 收敛 Runtime 依赖      | 已有 ModelGateway、策略注入、受限 ToolContext 与统一可信 HookManager；继续补 CheckpointStore、EventSink、隔离扩展与独立状态模块。 | Runtime 可在无 FastAPI/真实数据库环境测试；换模型适配器或添加工具无需修改 Loop；Hook 修改经过重校验，恢复复用已保存结果，未知副作用需先核对。 |
 | 3 · 明确资源版本           | Skill 包修订、MCP 注册修订、Wiki 索引修订、统一凭据引用。                                                       | 发布后改资源的影响符合明确规则；旧版本与恢复均可解释、可追踪。                                                                  |
 | 4 · 分离知识流程与前端页面 | 入库/索引与检索拆分；管理台按资源和任务功能拆页。                                                               | 上传不进入 Loop；检索仅访问实例绑定修订；App.vue 回到页面壳职责。                                                               |
 | 5 · 同进程运行可靠性       | 将同步数据库调用收口到异步或线程适配；明确事件落库、背压和恢复策略。                                            | 远程数据库变慢不阻塞所有执行；取消、超时、断线和恢复有可重复验证。                                                              |

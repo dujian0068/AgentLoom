@@ -62,6 +62,9 @@ async def request(model, endpoint, payload, secret):
 
 async def chat(model, messages, tools, secret):
     payload = {"model": model["model_id"], "messages": messages}
+    for name in ("temperature", "top_p"):
+        if model.get(name) is not None:
+            payload[name] = model[name]
     if model.get("max_output_tokens"):
         limit_key = "max_completion_tokens" if model.get("provider") == "openai" else "max_tokens"
         payload[limit_key] = model["max_output_tokens"]
@@ -92,7 +95,12 @@ async def chat(model, messages, tools, secret):
                 ids.append(call["id"])
             if len(set(ids)) != len(ids):
                 raise ValueError()
-        return message
+        return {
+            **message,
+            **({"usage": data["usage"]} if "usage" in data else {}),
+            **({"provider_request_id": data["id"]} if "id" in data else {}),
+            "finish_reason": data["choices"][0].get("finish_reason"),
+        }
     except (KeyError, IndexError, TypeError, ValueError):
         raise RuntimeError("模型响应缺少有效回答或工具调用，请检查模型协议兼容性") from None
 

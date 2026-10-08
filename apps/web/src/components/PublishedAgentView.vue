@@ -18,6 +18,7 @@ const {
   conversation,
   session,
   activeRun,
+  retryUnknownModels,
   running,
   events,
   runTab,
@@ -138,6 +139,15 @@ const {
         </div>
       </div>
       <p v-if="connectionNotice" class="notice">{{ connectionNotice }}</p>
+      <label
+        v-if="
+          activeRun?.resumable && activeRun.requires_model_retry && !running
+        "
+        class="choice"
+      >
+        <input v-model="retryUnknownModels" type="checkbox" />
+        已核对模型请求状态，允许重试未确认的请求（可能重复计费）
+      </label>
       <div class="runstate" v-if="activeRun">
         <span
           class="tag"
@@ -148,7 +158,9 @@ const {
         ><button
           v-if="activeRun.resumable && !running"
           class="primary"
-          :disabled="saving"
+          :disabled="
+            saving || (activeRun.requires_model_retry && !retryUnknownModels)
+          "
           @click="resumeRun"
         >
           继续任务

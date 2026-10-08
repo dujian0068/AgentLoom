@@ -63,13 +63,25 @@ class _PlanEditor:
 
 
 class _InvocationState:
-    def __init__(self, pending, persist):
+    def __init__(self, pending, persist, *, runtime=False):
         self._pending, self._persist = pending, persist
+        self._runtime = runtime
+
+    def _key(self, key):
+        if not isinstance(key, str) or not key:
+            raise ValueError("调用状态键必须为非空字符串")
+        if self._runtime:
+            return "__tool_runtime_" + key
+        if key.startswith("__tool_runtime_"):
+            raise ValueError("运行时调用状态不可通过工具状态接口访问")
+        return key
 
     def get(self, key, default=None):
+        key = self._key(key)
         return copy.deepcopy(self._pending.get(key, default))
 
     def set(self, key, value):
+        key = self._key(key)
         present, previous = key in self._pending, self._pending.get(key)
         self._pending[key] = copy.deepcopy(value)
         try:
@@ -181,4 +193,5 @@ def build_tool_context(
         citations=_CitationRecorder(state, persist),
         invocation=_InvocationState(pending, persist),
         authorize_tool=authorize_tool or (lambda definition: None),
+        runtime_state=_InvocationState(pending, persist, runtime=True),
     )

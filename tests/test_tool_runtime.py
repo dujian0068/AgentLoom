@@ -432,7 +432,7 @@ def test_legacy_child_pending_restores_same_child_and_private_handler_state(tmp_
 
     monkeypatch.setattr(provider, "chat", resumed_model)
     resumed, events, checkpoints = runner(tmp_path, snap, legacy)
-    resumed.resume()
+    resumed.resume(retry_unknown_models=True)
 
     async def run():
         try:

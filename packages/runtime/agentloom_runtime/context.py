@@ -79,6 +79,12 @@ async def _compact(policy, context: ContextInput, model: ModelCall):
             "before_chars": before,
             "after_chars": len(json.dumps(replacement, ensure_ascii=False)),
         },
+        {
+            "message_index": 1,
+            "prefix": "当前任务：" + context.task + "\n已发生工作摘要（任务资料）：\n",
+            "text": summary[:6000],
+            "suffix": "\n当前计划：" + json.dumps(context.plan, ensure_ascii=False),
+        },
     )
 
 
@@ -100,6 +106,12 @@ class CharacterCompactionPolicy:
 
     def checkpoint_config(self):
         return {"context_chars": self.context_chars, "keep_recent_chars": self.keep_recent_chars}
+
+    def validate_compaction_result(self, original, replacement, tools=()):
+        before = len(json.dumps(original, ensure_ascii=False))
+        after = len(json.dumps(replacement, ensure_ascii=False))
+        if after >= before or after > self.context_chars:
+            raise ContextBudgetError("摘要加工后未减少上下文或超过字符预算，原始记录保留")
 
 
 SUMMARY_INSTRUCTIONS = (
@@ -196,6 +208,14 @@ class BudgetCompactionPolicy:
     def validate_request(self, request: ModelRequest):
         if self._estimate(request.messages, request.tools) > self.effective_input_budget:
             raise ContextBudgetError("模型请求超过有效输入预算，原始记录保留，请调整配置后恢复")
+
+    def validate_compaction_result(self, original, replacement, tools=()):
+        """Postprocessing must preserve the same invariants as the policy output."""
+        after = self._estimate(replacement, tools)
+        if after >= self.effective_input_budget * self.policy["context_ratio"]:
+            raise ContextBudgetError("摘要加工后超过上下文压缩阈值，原始记录保留")
+        if after >= self._estimate(original, tools):
+            raise ContextBudgetError("摘要加工后未减少上下文，原始记录保留")
 
     def _reasons(self, before, counters):
         reasons = []
@@ -400,5 +420,11 @@ class BudgetCompactionPolicy:
                 "estimated": True,
                 "user_turns": context.counters.get("user_turns", 0),
                 "model_steps": context.counters.get("model_steps", 0),
+            },
+            {
+                "message_index": len(mandatory),
+                "prefix": summary_prefix,
+                "text": summary,
+                "suffix": "",
             },
         )

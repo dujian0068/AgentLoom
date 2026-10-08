@@ -13,6 +13,7 @@ from psycopg_pool import PoolTimeout
 from agentloom import store as db
 from agentloom.knowledge import search
 from agentloom.security import decrypt
+from agentloom.services.hooks import hook_manager
 from agentloom.services.session_history import save_checkpoint
 from agentloom.state import PENDING_FINALIZATIONS, TASKS
 
@@ -70,7 +71,15 @@ async def repair_finalizations():
 
 
 async def execute_run(
-    rid, snap, space, history, checkpoint=None, instruction="", history_metadata=None
+    rid,
+    snap,
+    space,
+    history,
+    checkpoint=None,
+    instruction="",
+    history_metadata=None,
+    *,
+    retry_unknown_models=False,
 ):
     secrets_in_use = []
     engine = None
@@ -86,9 +95,10 @@ async def execute_run(
         db.event(rid, kind, redact(payload))
 
     try:
-        row = db.query("SELECT input,status FROM runs WHERE id=?", (rid,), True)
+        row = db.query("SELECT input,status,user_id,version FROM runs WHERE id=?", (rid,), True)
         if not row or row["status"] == "cancelled":
             return
+        hooks = hook_manager(snap["config"], snap.get("hook_manifest"))
         snap["model_obj"]["secret"] = db.resource(snap["model_obj"]["id"], space, "models")[
             "secret"
         ]
@@ -116,9 +126,16 @@ async def execute_run(
                 lambda libs, q: search(space, libs, q),
                 checkpoint=checkpoint,
                 save=save,
+                hooks=hooks,
+                hook_scope={
+                    "space_id": space,
+                    "actor_id": row["user_id"],
+                    "run_id": rid,
+                    "published_revision": row["version"],
+                },
             )
             if checkpoint:
-                engine.resume(instruction)
+                engine.resume(instruction, retry_unknown_models=retry_unknown_models)
             output = redact(await engine.execute(row["input"], history, history_metadata))
             status = "needs_input" if engine.blocked else "succeeded"
             finish_run(
@@ -153,6 +170,16 @@ def get_run(rid, user):
     if not row:
         raise HTTPException(404, "运行不存在")
     return row
+
+
+def requires_model_retry(checkpoint):
+    """Unknown external requests need explicit authorization to risk another bill."""
+    return any(
+        operation.get("kind") == "model.chat"
+        and "raw_output" not in operation
+        and operation.get("actual_status") in {"running", "unknown"}
+        for operation in checkpoint.get("operations", {}).values()
+    )
 
 
 async def events_stream(rid, user, after=0):

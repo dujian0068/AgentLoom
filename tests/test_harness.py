@@ -239,7 +239,7 @@ def test_resume_does_not_repeat_completed_tool(tmp_path, monkeypatch):
 
     monkeypatch.setattr(provider, "chat", second)
     resumed, events, _ = runner(tmp_path, state=checkpoint)
-    resumed.resume()
+    resumed.resume(retry_unknown_models=True)
     assert asyncio.run(resumed.execute("生成文件")) == "文件已生成"
     assert not any(x["kind"] == "tool.started" for x in events)
 
@@ -312,7 +312,7 @@ def test_resume_child_preserves_same_instance_and_model(tmp_path, monkeypatch):
 
     monkeypatch.setattr(provider, "chat", second)
     resumed, events, _ = runner(tmp_path, snap, saved[-1])
-    resumed.resume()
+    resumed.resume(retry_unknown_models=True)
     assert asyncio.run(resumed.execute("复杂任务")) == "汇总完成"
     assert resumed.state["delegations"] == 1 and set(seen) == {"inherited-model"}
     assert not any(x["kind"] == "subagent.created" for x in events)

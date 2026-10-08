@@ -2,7 +2,7 @@
 
 2026-10-07 · 当前代码说明；目标架构另见[上下文管理设计](context-management-design-v0.1.md)。
 
-本轮把消息管理从 Loop 抽到可注入的 ContextManager，保存连续的会话来源记录，并为新发布配置提供默认 80% 的主动压缩。模型页支持填写 Key 后获取可用模型，自动填入可识别的窗口参数。本页描述已经实现的边界；统一 Hooks、Memory、完整资源版本与多进程调度仍待建设。
+本轮把消息管理从 Loop 抽到可注入的 ContextManager，保存连续的会话来源记录，并为新发布配置提供默认 80% 的主动压缩。模型页支持填写 Key 后获取可用模型，自动填入可识别的窗口参数。本页描述上下文实现；2026-10-08 已加入统一可信 Hooks，见[Hooks 使用说明](hooks-runtime-v0.1.md)。Memory、完整资源版本与多进程调度仍待建设。
 
 ## 1. 模块边界
 
@@ -152,4 +152,4 @@ GET /api/v1/sessions/{session_id}/messages?after=0&limit=100&instance=main
 
 主要测试：[上下文管理](../tests/test_context_manager.py)、[会话历史](../tests/test_session_history.py)、[配置冻结](../tests/test_context_config.py)、[模型目录](../tests/test_model_catalog.py)。后端测试使用临时 SQLite 与可控模型替身，不代表真实供应商、用户 PostgreSQL 或完整容器环境已通过集成验证。
 
-后续仍需：类型化来源与精确摘要来源范围、资源修订和撤权后的视图失效、通用大结果引用与回读、版本化 StateStore/CAS、按 purpose 的完整装配策略、实际 Token usage 与供应商 tokenizer、持久压缩失败节流、MemoryService、统一 HookManager，以及多进程任务调度。SVG 继续表示目标架构，本轮未修改图源。
+后续仍需：类型化来源与精确摘要来源范围、资源修订和撤权后的视图失效、通用大结果引用与回读、版本化 StateStore/CAS、按 purpose 的完整装配策略、供应商 tokenizer、持久压缩失败节流、MemoryService、隔离 Hook Worker，以及多进程任务调度。模型响应中的真实 usage 已随 Hook 操作记录保存。SVG 继续表示目标架构，本轮未修改图源。

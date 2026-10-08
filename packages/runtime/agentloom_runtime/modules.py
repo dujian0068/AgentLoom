@@ -2,8 +2,9 @@
 
 import json
 from copy import deepcopy
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 
+from .hooks import HookManager
 from .module_contracts import (
     CompactionPolicy,
     CompletionPolicy,
@@ -22,10 +23,11 @@ class RuntimeModules:
     strategy: ExecutionStrategy
     context: ContextManager
     limits: ExecutionLimits
+    hooks: HookManager = field(default_factory=HookManager)
 
     def bindings(self):
         bindings = {}
-        for name in ("model", "compaction", "completion", "strategy", "context"):
+        for name in ("model", "compaction", "completion", "strategy", "context", "hooks"):
             module = getattr(self, name)
             identity = getattr(module, "module_id", None)
             if not isinstance(identity, str) or not identity.strip():
@@ -38,7 +40,14 @@ class RuntimeModules:
 
     async def aclose(self):
         errors, seen = [], set()
-        for module in (self.strategy, self.completion, self.context, self.compaction, self.model):
+        for module in (
+            self.strategy,
+            self.completion,
+            self.context,
+            self.compaction,
+            self.model,
+            self.hooks,
+        ):
             if id(module) in seen:
                 continue
             seen.add(id(module))

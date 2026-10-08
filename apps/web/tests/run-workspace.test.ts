@@ -28,6 +28,7 @@ function row(overrides: Partial<RunState> = {}): RunState {
     error: null,
     session_id: "session",
     resumable: false,
+    requires_model_retry: false,
     events: [],
     artifacts: [],
     ...overrides,
@@ -173,5 +174,58 @@ describe("execution stream", () => {
     expect(w.running.value).toBe(false);
     expect(w.conversation.value.at(-1)?.text).toBe("provider unavailable");
     expect(w.activeRun.value?.resumable).toBe(true);
+  });
+});
+
+describe("unknown model request recovery", () => {
+  it("requires an explicit choice and resets it after authorized recovery", async () => {
+    apiMock.mockResolvedValue([]);
+    postMock.mockResolvedValue({
+      run_id: "run",
+      session_id: "session",
+      version: 1,
+      after: 5,
+    });
+    const w = workspace();
+    setAgent(w);
+    w.activeRun.value = row({
+      status: "failed",
+      resumable: true,
+      requires_model_retry: true,
+    });
+    await w.resumeRun();
+    expect(postMock).not.toHaveBeenCalled();
+    w.retryUnknownModels.value = true;
+    await w.resumeRun();
+    expect(postMock).toHaveBeenCalledWith("/v1/runs/run/resume", {
+      input: "",
+      stream: false,
+      retry_unknown_models: true,
+    });
+    expect(w.retryUnknownModels.value).toBe(false);
+    expect(w.activeRun.value?.requires_model_retry).toBe(false);
+    w.stopStream();
+  });
+
+  it("ordinary recovery never sends stale permission from another run", async () => {
+    apiMock.mockResolvedValue([]);
+    postMock.mockResolvedValue({
+      run_id: "run",
+      session_id: "session",
+      version: 1,
+    });
+    const w = workspace();
+    setAgent(w);
+    w.retryUnknownModels.value = true;
+    w.activeRun.value = row({ status: "failed", resumable: true });
+    await w.resumeRun();
+    expect(postMock).toHaveBeenCalledWith("/v1/runs/run/resume", {
+      input: "",
+      stream: false,
+      retry_unknown_models: false,
+    });
+    w.retryUnknownModels.value = true;
+    w.newSession();
+    expect(w.retryUnknownModels.value).toBe(false);
   });
 });

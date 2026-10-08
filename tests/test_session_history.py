@@ -88,7 +88,10 @@ def test_failed_work_and_supplement_survive_but_old_resume_does_not_see_later_qu
     _, row = run(client, aid, "later-B", first["session_id"])
     assert row["status"] == "succeeded"
     assert "partial valid result" in json.dumps(captured[-1])
-    resumed = client.post(f"/api/v1/runs/{first['run_id']}/resume", json={"input": "supplement-A"})
+    resumed = client.post(
+        f"/api/v1/runs/{first['run_id']}/resume",
+        json={"input": "supplement-A", "retry_unknown_models": True},
+    )
     assert resumed.status_code == 200
     assert wait_run(client, first["run_id"])["status"] == "succeeded"
     assert "later-B" not in json.dumps(captured[-1])

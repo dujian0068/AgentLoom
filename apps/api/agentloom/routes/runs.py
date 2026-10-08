@@ -21,6 +21,7 @@ from agentloom.services.runs import (
     finish_run,
     flush_finalizations,
     get_run,
+    requires_model_retry,
 )
 from agentloom.state import TASKS
 
@@ -107,12 +108,16 @@ async def run_agent(aid: str, payload: RunInput, user=Depends(auth)):
 @router.get("/api/v1/runs/{rid}")
 def run_state(rid: str, user=Depends(auth)):
     row = get_run(rid, user)
+    saved = db.query("SELECT payload FROM checkpoints WHERE run_id=?", (rid,), True)
     row["resumable"] = row["status"] in (
         "failed",
         "cancelled",
         "interrupted",
         "needs_input",
-    ) and bool(db.query("SELECT run_id FROM checkpoints WHERE run_id=?", (rid,), True))
+    ) and bool(saved)
+    row["requires_model_retry"] = bool(
+        row["resumable"] and saved and requires_model_retry(json.loads(decrypt(saved["payload"])))
+    )
     row["events"] = [
         {"seq": x["seq"], "kind": x["kind"], **json.loads(x["payload"])}
         for x in db.query("SELECT * FROM events WHERE run_id=? ORDER BY seq", (rid,))
@@ -207,6 +212,12 @@ async def resume_run(rid: str, payload: ResumeInput, user=Depends(auth)):
         if not saved:
             raise ValueError("此任务没有可恢复的执行检查点，请新建任务")
         checkpoint = json.loads(decrypt(saved["payload"]))
+        if requires_model_retry(checkpoint) and not payload.retry_unknown_models:
+            raise HTTPException(
+                409,
+                "模型请求结果尚未确认，请先核对供应商状态；如需重试，显式设置 "
+                "retry_unknown_models=true（可能重复计费）",
+            )
         if payload.input:
             queue_instruction(checkpoint, payload.input)
             session_history.sync_records(c, row["session_id"], rid, checkpoint)
@@ -215,8 +226,29 @@ async def resume_run(rid: str, payload: ResumeInput, user=Depends(auth)):
                 (encrypt(json.dumps(checkpoint, ensure_ascii=False)), time.time(), rid),
             )
         c.execute("UPDATE runs SET status='queued',output='',error=NULL WHERE id=?", (rid,))
-        after = db._insert_event(c, rid, "run.resumed", {"input": payload.input, "run_id": rid}) - 1
-    TASKS[rid] = asyncio.create_task(execute_run(rid, snap, user["space_id"], [], checkpoint))
+        after = (
+            db._insert_event(
+                c,
+                rid,
+                "run.resumed",
+                {
+                    "input": payload.input,
+                    "run_id": rid,
+                    "retry_unknown_models": payload.retry_unknown_models,
+                },
+            )
+            - 1
+        )
+    TASKS[rid] = asyncio.create_task(
+        execute_run(
+            rid,
+            snap,
+            user["space_id"],
+            [],
+            checkpoint,
+            retry_unknown_models=payload.retry_unknown_models,
+        )
+    )
     if payload.stream:
         return StreamingResponse(
             events_stream(rid, user, after),
