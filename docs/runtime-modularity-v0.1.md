@@ -1,5 +1,7 @@
 # AgentLoom Runtime 模块化实现 v0.1
 
+> **模块化第一阶段记录。** 下文的动机与示例保留；后续已新增 ContextManager、Hooks、WorkspaceProvider 和兼容校验。完整现状以[Runtime 详细设计](runtime-design.md)为准（代码 `9941e31`，2026-10-09）。
+
 2026-10-07 · 第一轮模块化接口与使用说明
 
 本轮将模型调用、上下文压缩、完成判断和 ReAct / Plan 行为拆成可注入模块，并收窄工具处理器、事件观察者可以接触的状态。本页保留第一轮接口和当时验证结果。
@@ -10,17 +12,17 @@
 
 [契约定义](../packages/runtime/agentloom_runtime/module_contracts.py)使用 Python Protocol；受信任的后端实现满足方法签名即可替换，无需继承默认类。
 
-| 模块 | 契约 | 默认实现与边界 |
-| ---- | ---- | ------------ |
-| ModelGateway | `invoke(ModelRequest) -> dict` | [ProviderModelGateway](../packages/runtime/agentloom_runtime/model_gateway.py) 调用 provider 并解析模型凭据；Engine 不再持有 provider 或模型解密回调。 |
-| CompactionPolicy | `compact(ContextInput, ModelCall) -> CompactionResult \| None` | [BudgetCompactionPolicy / CharacterCompactionPolicy](../packages/runtime/agentloom_runtime/context.py)：新发布策略使用预算 / 轮数，旧无策略版本保留 60,000 字符触发与 16,000 近期目标。 |
-| ContextManager | `create / restore / append / queue_input / drain_inputs / prepare` | [JournalContextManager](../packages/runtime/agentloom_runtime/context_manager.py) 管理来源、可见视图、摘要快照和计数；通过 `context_manager=` 注入。 |
-| CompletionPolicy | `review(CompletionInput, ModelCall) -> CompletionDecision` | [EvidenceCompletionPolicy](../packages/runtime/agentloom_runtime/completion.py) 返回 complete / continue / blocked；默认完成检查仍用模型，不能替代实际工具证据。 |
-| ExecutionStrategy | `instructions`、`candidate_feedback`、`authorize_tool` | [ReactStrategy / PlanStrategy](../packages/runtime/agentloom_runtime/execution_strategy.py) 提供指令、交付前反馈与工具准入；子 Agent 不单独配置模式。 |
-| ExecutionLimits | `max_model_calls`、`max_iterations` | 正整数，默认 96 次模型调用、64 次 Loop；摘要和完成检查同样消耗模型调用预算。 |
-| ToolRegistry | `register`、`resolve`、`definitions`、`validate` | [ToolRegistry](../packages/runtime/agentloom_runtime/tool_runtime.py) 可整体替换，也可在组装时追加工具；组装后冻结注册。 |
+| 模块              | 契约                                                               | 默认实现与边界                                                                                                                                                                          |
+| ----------------- | ------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ModelGateway      | `invoke(ModelRequest) -> dict`                                     | [ProviderModelGateway](../packages/runtime/agentloom_runtime/model_gateway.py) 调用 provider 并解析模型凭据；Engine 不再持有 provider 或模型解密回调。                                  |
+| CompactionPolicy  | `compact(ContextInput, ModelCall) -> CompactionResult \| None`     | [BudgetCompactionPolicy / CharacterCompactionPolicy](../packages/runtime/agentloom_runtime/context.py)：新发布策略使用预算 / 轮数，旧无策略版本保留 60,000 字符触发与 16,000 近期目标。 |
+| ContextManager    | `create / restore / append / queue_input / drain_inputs / prepare` | [JournalContextManager](../packages/runtime/agentloom_runtime/context_manager.py) 管理来源、可见视图、摘要快照和计数；通过 `context_manager=` 注入。                                    |
+| CompletionPolicy  | `review(CompletionInput, ModelCall) -> CompletionDecision`         | [EvidenceCompletionPolicy](../packages/runtime/agentloom_runtime/completion.py) 返回 complete / continue / blocked；默认完成检查仍用模型，不能替代实际工具证据。                        |
+| ExecutionStrategy | `instructions`、`candidate_feedback`、`authorize_tool`             | [ReactStrategy / PlanStrategy](../packages/runtime/agentloom_runtime/execution_strategy.py) 提供指令、交付前反馈与工具准入；子 Agent 不单独配置模式。                                   |
+| ExecutionLimits   | `max_model_calls`、`max_iterations`                                | 正整数，默认 96 次模型调用、64 次 Loop；摘要和完成检查同样消耗模型调用预算。                                                                                                            |
+| ToolRegistry      | `register`、`resolve`、`definitions`、`validate`                   | [ToolRegistry](../packages/runtime/agentloom_runtime/tool_runtime.py) 可整体替换，也可在组装时追加工具；组装后冻结注册。                                                                |
 
-`ModelRequest` 包含 messages、tools、purpose 和 instance。当前 purpose 使用 `action`、`compaction`、`verification`；目标文档中的 `completion` 尚未替换现有 `verification`。网关返回模型消息字典，例如 role、content、tool_calls。所有网关响应都经宿主统一规范化与校验，空响应、畸形调用、重复 call_id 不进入消息或 pending 状态；自定义网关同样遵守此规则。
+`ModelRequest` 包含 messages、tools、purpose、instance 和 options。当前 purpose 使用 `action`、`compaction`、`verification`；目标文档中的 `completion` 尚未替换现有 `verification`。网关返回模型消息字典，例如 role、content、tool_calls。所有网关响应都经宿主统一规范化与校验，空响应、畸形调用、重复 call_id 不进入消息或 pending 状态；自定义网关同样遵守此规则。
 
 ContextInput 包含当前任务、计划、消息与实例；CompletionInput 增加执行证据和候选结果。宿主传递工作副本，模块返回候选结果，由 Engine 提交消息与检查点。压缩和完成模块请求模型时使用宿主提供的 ModelCall，使调用仍经过统一预算和模型网关。宿主固定辅助调用的 purpose 和 instance，并拒绝它们携带行动工具；压缩返回值提交前还会校验原始系统消息及完整工具调用/结果关联。模块不应访问 Engine、frame 或数据库的内部对象。
 
@@ -36,7 +38,7 @@ create_engine(
     checkpoint=None, save=None, configure_tools=None,
     *, model_gateway=None, compaction_policy=None,
     completion_policy=None, strategy=None, limits=None, registry=None,
-    context_manager=None,
+    context_manager=None, hooks=None, hook_scope=None, workspace_provider=None,
 )
 ```
 
@@ -107,11 +109,11 @@ asyncio.run(main())
 
 [ToolContext](../packages/runtime/agentloom_runtime/tool_contracts.py)不再直接公开 frame、全局 state 或通用 run_child 回调。它提供实例标识、工作区、深只读 config、观察出口，以及有限能力：
 
-| 接口 | 允许操作 |
-| ---- | -------- |
-| `plan.read/update` | 读取只读计划，或经校验更新计划。 |
-| `children.run` | 按已绑定的子 Agent 配置执行或恢复任务。 |
-| `citations.record` | 记录引用元数据。 |
+| 接口                 | 允许操作                                                       |
+| -------------------- | -------------------------------------------------------------- |
+| `plan.read/update`   | 读取只读计划，或经校验更新计划。                               |
+| `children.run`       | 按已绑定的子 Agent 配置执行或恢复任务。                        |
+| `citations.record`   | 记录引用元数据。                                               |
 | `invocation.get/set` | 操作当前工具调用的私有恢复状态，读取和写入均与调用方数据分离。 |
 
 [execution_services.py](../packages/runtime/agentloom_runtime/execution_services.py)仍把这些接口适配到宿主的 format=1 状态。它内部持有 frame/state，关键保存失败会还原本地变更并上抛 ToolPersistenceError；此错误不能被当作普通工具失败后继续消费调用。子任务仍复用 Engine.loop，当前顺序执行、最多 8 次委派，不递归委派。
@@ -124,13 +126,13 @@ asyncio.run(main())
 
 `register(topic, handler)` 返回释放句柄，须在该 topic 的在途请求及通知清理结束后调用。`cancel_topic(topic)` 只清理指定 topic，不关闭共享总线，也不阻止新请求；宿主先停止接单再清理。旧释放句柄不会移除后来新注册的处理器。
 
-每个 Engine 同时只接受一个主 execute；关闭后禁止继续执行。运行方必须在 finally 中等待 `engine.close()`；关闭会先取消并等待活动执行，再由 ToolRuntime 清理自有总线，或仅清理共享总线中的工具 topic，随后 RuntimeModules 按执行策略、完成、压缩、模型的顺序调用模块可选的异步 `aclose()`，同一个对象不会重复关闭。带客户端、文件句柄等资源的注入模块应实现 aclose；默认按单个 Engine 所有权组装，不应把待自动关闭的同一模块对象随意共享给多个 Engine。
+每个 Engine 同时只接受一个主 execute；关闭后禁止继续执行。运行方必须在 finally 中等待 `engine.close()`；关闭会先取消并等待活动执行，再由 ToolRuntime 清理自有总线，或仅清理共享总线中的工具 topic，随后 RuntimeModules 按执行策略、完成、上下文、压缩、模型、Hooks 的顺序调用模块可选的异步 `aclose()`，同一个对象不会重复关闭。带客户端、文件句柄等资源的注入模块应实现 aclose；默认按单个 Engine 所有权组装，不应把待自动关闭的同一模块对象随意共享给多个 Engine。
 
 模块关闭时的异常会向宿主报告。取消依赖处理器的协作式清理，不能撤销外部服务已经发生的副作用。统一生命周期 HookManager 已通过同一组契约接入模型、工具、上下文与运行边界；观察订阅仍保持独立。
 
 ## 5. 模块版本与恢复
 
-[RuntimeModules](../packages/runtime/agentloom_runtime/modules.py)保存 model、compaction、completion、strategy 和 limits 的绑定。每个模块必须声明非空 `module_id`，约定携带兼容版本，如 `character-handoff/v1`。影响恢复的配置通过可选 `checkpoint_config()` 返回 JSON 数据；未提供该方法时配置按空对象记录，不能把关键配置藏在未声明的对象字段里。默认 ProviderModelGateway 记录 provider、base_url、model_id，不记录 secret，允许在相同模型绑定下轮换凭据。
+[RuntimeModules](../packages/runtime/agentloom_runtime/modules.py)保存 model、compaction、completion、strategy、context、hooks 和 limits 的绑定。每个模块必须声明非空 `module_id`，约定携带兼容版本，如 `character-handoff/v1`。影响恢复的配置通过可选 `checkpoint_config()` 返回 JSON 数据；未提供该方法时配置按空对象记录，不能把关键配置藏在未声明的对象字段里。默认 ProviderModelGateway 记录 provider、base_url、model_id，不记录 secret，允许在相同模型绑定下轮换凭据。
 
 检查点新增 `modules` 绑定，并纳入工具目录的描述、Schema、策略字段和 implementation_id；顶层格式仍为 `format=1`。新检查点恢复要求模块 ID、声明配置、运行预算与工具绑定一致；不匹配则拒绝恢复，不能默默换算法继续旧任务。没有 modules 字段的旧检查点仅允许内置模块、默认字符预算、默认 ExecutionLimits 和带内置版本标识的工具恢复；改用自定义模块、预算或工具须显式迁移。修改算法且不兼容时升级 module_id，不复用旧 ID。
 

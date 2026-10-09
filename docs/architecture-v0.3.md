@@ -2,6 +2,8 @@ AGENTLOOM / ARCHITECTURE
 
 # 总体架构、分层与模块职责
 
+> **目标设计 / 阶段文档。** 2026-10-09 已按代码 `9941e31` 整理[总体技术设计](technical-design.md)和[Runtime 详细设计](runtime-design.md)。本文保留目标职责、拟议接口与演进背景；图中的隔离 Worker、完整来源追踪和 Memory 等不代表均已实现。当前 SDK 以[Hooks 使用说明](hooks-runtime-v0.1.md)为准。
+
 架构设计 v0.3 · 2026-10-07 · 基于当前代码核对 · 供后续迭代评审
 
 采用模块化单体：一个 Vue 工作台、一个 Python 服务、一个 PostgreSQL 数据库。内部明确管理配置、任务运行、能力执行和持久化边界，再按实际规模拆分部署。
@@ -79,7 +81,7 @@ AGENTLOOM / ARCHITECTURE
 | 交互层        | 管理表单、配置编辑、运行对话、事件显示、引用及产物下载。                         | 通过 HTTP/SSE 调用平台。                     | `apps/web/src`；运行页已拆分，资源管理仍集中在 App.vue，建议按功能拆页。                  |
 | API 接入层    | 解析请求、识别身份、校验输入、转换 HTTP 错误、提供事件流。                       | 调用应用服务，返回稳定 API 契约。            | `routes/`、schema.py、dependencies.py；将路由中的业务事务和 SQL 下移。                    |
 | 应用服务层    | 完成保存草稿、发布、导入资源、创建/恢复/取消运行等完整用例；管理事务和业务约束。 | 调用仓储及 Runtime 的启动接口。              | `services/` 已有部分实现；补齐资源、发布和完整 RunService。                               |
-| Agent Runtime | 执行已发布配置：推理、行动、观察、继续、完成或等待补充。                         | 依赖模型、工具调用、检查点、事件写入等接口。 | `packages/runtime`；Engine 通过注入网关调用模型，provider 和模型解密已移至适配器。                                        |
+| Agent Runtime | 执行已发布配置：推理、行动、观察、继续、完成或等待补充。                         | 依赖模型、工具调用、检查点、事件写入等接口。 | `packages/runtime`；Engine 通过注入网关调用模型，provider 和模型解密已移至适配器。        |
 | 能力执行层    | 路由工具请求、过滤工具目录、校验权限与参数、治理执行、返回统一结果。             | 处理器调用具体适配器。                       | event_bus.py、tool_runtime.py、handlers/ 已落地。                                         |
 | 基础设施层    | 数据库、文件、网络协议、容器、密钥与索引的具体实现。                             | 实现上层声明的接口，由组装入口注入。         | database.py、store.py、assets.py、provider.py、mcp_tools.py、sandbox.py；仍待按接口收敛。 |
 
@@ -89,17 +91,17 @@ AGENTLOOM / ARCHITECTURE
 
 ## 3. 平台应用服务：管理什么、交付什么
 
-| 建议模块               | 负责的功能                                                                                | 交付给其他模块                       | 当前状态                                                                      |
-| ---------------------- | ----------------------------------------------------------------------------------------- | ------------------------------------ | ----------------------------------------------------------------------------- |
-| Identity / Space       | 登录、空间成员、角色、邀请码、API Key、当前调用者范围。                                   | 可信的 user_id、space_id、权限集合。 | 基础 owner/member 已有；多空间切换与细粒度角色尚不完整。                      |
-| ModelConnectionService | DeepSeek/OpenAI 连接配置、模型 ID、聊天/embedding 用途、连接测试与凭据轮换。              | 模型配置 + 凭据引用。                | 已有管理接口；目标是所有供应商凭据经 SecretStore 解析。                       |
-| SkillService           | 文件夹/Git 导入、SKILL.md 解析、目录和附件管理、依赖与兼容信息、版本。                    | 指定版本的 Skill 元数据与包引用。    | 已有目录导入和按需加载；完整不可变资源版本与宿主兼容矩阵待补齐。              |
-| ToolService            | 外部 MCP 接入、工具发现/测试、托管 Python 工具导入与构建、schema 和服务状态。             | 可发布的工具服务版本与工具目录。     | 已有 HTTP/SSE 与 Docker stdio 路径；容器能力仍待实际环境验证。                |
+| 建议模块               | 负责的功能                                                                                | 交付给其他模块                       | 当前状态                                                                                                                |
+| ---------------------- | ----------------------------------------------------------------------------------------- | ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
+| Identity / Space       | 登录、空间成员、角色、邀请码、API Key、当前调用者范围。                                   | 可信的 user_id、space_id、权限集合。 | 基础 owner/member 已有；多空间切换与细粒度角色尚不完整。                                                                |
+| ModelConnectionService | DeepSeek/OpenAI 连接配置、模型 ID、聊天/embedding 用途、连接测试与凭据轮换。              | 模型配置 + 凭据引用。                | 已有管理接口；目标是所有供应商凭据经 SecretStore 解析。                                                                 |
+| SkillService           | 文件夹/Git 导入、SKILL.md 解析、目录和附件管理、依赖与兼容信息、版本。                    | 指定版本的 Skill 元数据与包引用。    | 已有目录导入和按需加载；完整不可变资源版本与宿主兼容矩阵待补齐。                                                        |
+| ToolService            | 外部 MCP 接入、工具发现/测试、托管 Python 工具导入与构建、schema 和服务状态。             | 可发布的工具服务版本与工具目录。     | 已有 HTTP/SSE 与 Docker stdio 路径；容器能力仍待实际环境验证。                                                          |
 | HookExtensionService   | 导入扩展包、声明权限、样例测试、发布版本、绑定 Agent 或能力；运行时读取冻结的发布绑定。   | 扩展版本、配置与绑定快照。           | 已有部署时可信注册、API 绑定与发布清单验证；上传、管理页面与隔离 Worker 仍待实现。执行机制归属 Runtime 的 HookManager。 |
-| KnowledgeService       | MD/TXT/SQL 上传、解析分块、向量化和关键词索引、文档状态与索引版本。                       | 可检索资料集及索引修订。             | 入库与检索目前都在 knowledge.py，建议拆成 IngestionService 与 Retriever。     |
-| AgentService           | 主 Agent 草稿、Prompt、模型与策略、资源绑定、内嵌子 Agent 配置。                          | 经过结构校验的 AgentConfig。         | 已有，保存逻辑部分位于路由。                                                  |
-| ReleaseService         | 校验依赖资源、解析修订、生成发布快照、发布版本编号与历史。                                | AgentVersion / RuntimeSpec。         | 快照构建已有，发布事务仍在 routes/agents.py；资源物理版本未完全冻结。         |
-| RunService             | 创建 Session/Run、绑定发布版本、空间配额、调度 Runtime、停止/恢复、终态、历史、产物入口。 | run_id、状态、事件流与结果。         | 分散在 routes/runs.py 和 services/runs.py，应成为任务生命周期的唯一业务入口。 |
+| KnowledgeService       | MD/TXT/SQL 上传、解析分块、向量化和关键词索引、文档状态与索引版本。                       | 可检索资料集及索引修订。             | 入库编排与可恢复查询在 services/knowledge_imports.py、services/knowledge_search.py；分块/检索算法仍在 knowledge.py。    |
+| AgentService           | 主 Agent 草稿、Prompt、模型与策略、资源绑定、内嵌子 Agent 配置。                          | 经过结构校验的 AgentConfig。         | 已有，保存逻辑部分位于路由。                                                                                            |
+| ReleaseService         | 校验依赖资源、解析修订、生成发布快照、发布版本编号与历史。                                | AgentVersion / RuntimeSpec。         | 快照构建已有，发布事务仍在 routes/agents.py；资源物理版本未完全冻结。                                                   |
+| RunService             | 创建 Session/Run、绑定发布版本、空间配额、调度 Runtime、停止/恢复、终态、历史、产物入口。 | run_id、状态、事件流与结果。         | 分散在 routes/runs.py 和 services/runs.py，应成为任务生命周期的唯一业务入口。                                           |
 
 **管理控制面与运行服务分开：** 资源、Agent 配置及发布主要属于管理控制面；RunService 管理实例生命周期，属于运行承载部分。
 
@@ -109,18 +111,18 @@ AGENTLOOM / ARCHITECTURE
 
 ## 4. Runtime：把配置变成持续执行的任务
 
-| 模块              | 单一职责                                                                                   | 现有实现 / 下一步                                                                                               |
-| ----------------- | ------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------- |
-| RuntimeFactory    | 接收发布快照及依赖接口，组装 Loop、注册表、总线和处理器。                                  | `create_engine()` 注入 RuntimeModules、工具注册表和运行预算；完整 RuntimeSpec 仍待类型化。                                                    |
-| Loop / Engine     | 区分模型回答和 tool_calls，维护轮次与 pending 调用，将工具结果回填对话，决定下一轮或结束。 | `engine.py`；已经去掉具体工具执行分支。                                                                         |
-| HookManager       | 在明确生命周期节点按顺序调用扩展；管理允许的修改、拦截、超时、异常与恢复语义。             | 已实现可信 Python Hook 契约、注册 / 绑定、管道、执行器、检查点与恢复，接入模型 / 工具 / 上下文 / 运行与子任务；上传隔离及管理端待实现。 |
-| ModelGateway      | 统一模型请求与响应、凭据解析、限流和用量记录，对接不同供应商适配器。                       | `ModelGateway` Protocol 与 `ProviderModelGateway` 已实现；统一模型 Hook 边界已接入。Engine 不再导入 provider 或持有模型解密回调，统一限流仍待完善。 |
-| ContextManager    | 管理实例内跨 Loop 上下文、会话历史继承、Token 预算与来源；按配置主动压缩完整交互组。 | `JournalContextManager`、预算策略与连续会话来源 / 视图已落地；新发布配置采用 80% / 轮数触发，旧无策略版本保留字符策略。见[当前实现](runtime-context-v0.2.md)。 |
-| PlanManager       | 保存和调整计划及步骤状态；Plan 要求先计划再自动执行。                                      | `planning.py` 校验计划，handler 通过受限 PlanEditor 更新；format=1 状态仍由宿主适配器持有。                                                       |
-| CompletionPolicy  | 依据目标、执行证据与未完成计划判断 complete / continue / blocked。                         | `CompletionPolicy` Protocol 与默认 `EvidenceCompletionPolicy` 已可注入；默认仍调用同一模型检查，不能替代真实工具验证。                                                 |
-| ChildTaskManager  | 创建、恢复、收集子任务；继承主模型，维护子任务上下文、资源范围与预算。                     | handler 通过 ChildRunner 接口调用 `execution_services` 宿主适配器，再复用 Engine.loop；尚非独立子任务状态模块。子 Agent 不配置独立模式。 |
-| CheckpointManager | 记录对话、计划、调用边界、子实例和恢复信息；未知执行结果先核对，避免自动重放。             | Engine.persist + API save 已有；检查点记录模块 ID/配置、模型身份及工具版本目录并校验恢复兼容，仍使用 format=1，CheckpointStore 与显式迁移待补。                            |
-| ExecutionPolicy   | 统一运行时限、模型调用预算、最大轮次、委派数和恢复策略。                                   | `ExecutionLimits` 已注入模型调用数与循环上限；`ExecutionStrategy` 可替换 ReAct/Plan 行为，超时/委派/恢复策略仍待收敛。                                      |
+| 模块              | 单一职责                                                                                   | 现有实现 / 下一步                                                                                                                                              |
+| ----------------- | ------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| RuntimeFactory    | 接收发布快照及依赖接口，组装 Loop、注册表、总线和处理器。                                  | `create_engine()` 注入 RuntimeModules、工具注册表和运行预算；完整 RuntimeSpec 仍待类型化。                                                                     |
+| Loop / Engine     | 区分模型回答和 tool_calls，维护轮次与 pending 调用，将工具结果回填对话，决定下一轮或结束。 | `engine.py`；已经去掉具体工具执行分支。                                                                                                                        |
+| HookManager       | 在明确生命周期节点按顺序调用扩展；管理允许的修改、拦截、超时、异常与恢复语义。             | 已实现可信 Python Hook 契约、注册 / 绑定、管道、执行器、检查点与恢复，接入模型 / 工具 / 上下文 / 运行与子任务；上传隔离及管理端待实现。                        |
+| ModelGateway      | 统一模型请求与响应、凭据解析、限流和用量记录，对接不同供应商适配器。                       | `ModelGateway` Protocol 与 `ProviderModelGateway` 已实现；统一模型 Hook 边界已接入。Engine 不再导入 provider 或持有模型解密回调，统一限流仍待完善。            |
+| ContextManager    | 管理实例内跨 Loop 上下文、会话历史继承、Token 预算与来源；按配置主动压缩完整交互组。       | `JournalContextManager`、预算策略与连续会话来源 / 视图已落地；新发布配置采用 80% / 轮数触发，旧无策略版本保留字符策略。见[当前实现](runtime-context-v0.2.md)。 |
+| PlanManager       | 保存和调整计划及步骤状态；Plan 要求先计划再自动执行。                                      | `planning.py` 校验计划，handler 通过受限 PlanEditor 更新；format=1 状态仍由宿主适配器持有。                                                                    |
+| CompletionPolicy  | 依据目标、执行证据与未完成计划判断 complete / continue / blocked。                         | `CompletionPolicy` Protocol 与默认 `EvidenceCompletionPolicy` 已可注入；默认仍调用同一模型检查，不能替代真实工具验证。                                         |
+| ChildTaskManager  | 创建、恢复、收集子任务；继承主模型，维护子任务上下文、资源范围与预算。                     | handler 通过 ChildRunner 接口调用 `execution_services` 宿主适配器，再复用 Engine.loop；尚非独立子任务状态模块。子 Agent 不配置独立模式。                       |
+| CheckpointManager | 记录对话、计划、调用边界、子实例和恢复信息；未知执行结果先核对，避免自动重放。             | Engine.persist + API save 已有；检查点记录模块 ID/配置、模型身份及工具版本目录并校验恢复兼容，仍使用 format=1，CheckpointStore 与显式迁移待补。                |
+| ExecutionPolicy   | 统一运行时限、模型调用预算、最大轮次、委派数和恢复策略。                                   | `ExecutionLimits` 已注入模型调用数与循环上限；`ExecutionStrategy` 可替换 ReAct/Plan 行为，超时/委派/恢复策略仍待收敛。                                         |
 
 **Loop 仍负责流程判断：** 调用模型、处理 tool_calls、等待结果、继续执行、判断完成。这些是循环本身的职责。具体工具的协议、文件操作和服务地址由下面的能力层处理。
 
@@ -142,7 +144,7 @@ Runtime 局部图：注册表提供契约与绑定，HookManager 经 Pipeline �
 
 Hooks 直接参与执行流程，调用方需要等待 HookResult，再决定继续、应用修改或阻止当前阶段。HookManager 归属 Runtime；Loop、模型调用包装器、上下文管理器、工具分发器和子任务管理器在各自边界调用它。管理端后续可以管理 Hook 配置，但 Hook 执行机制属于运行内核。
 
-> **当前状态（2026-10-08）：** 统一 HookManager、显式 HookResult、可信执行管道及主要运行边界已实现。下面仍描述总体目标，具体挂点白名单、恢复规则、Python SDK 和剩余范围见[Hooks 运行时使用说明](hooks-runtime-v0.1.md)。团队代码的隔离执行、上传管理与 Embedding 挂点仍待实现。
+> **当前状态（2026-10-08）：** 统一 HookManager、显式 HookResult、可信执行管道及主要运行边界已实现。下面仍描述总体目标，具体挂点白名单、恢复规则、Python SDK 和剩余范围见[Hooks 运行时使用说明](hooks-runtime-v0.1.md)。团队代码的隔离执行和上传管理仍待实现；Embedding 挂点与索引处理链已经实现，见[Embedding 专题](embedding-hooks-v0.1.md)。
 
 | 生命周期       | 建议 Hook 点                                              | 允许的作用                                                                                                                                      |
 | -------------- | --------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -222,15 +224,15 @@ Handler：使用具体能力
 
 页面断开 SSE 不决定工具是否继续执行。总线的 `request.completed` 只表示收到回包，回包里仍可能是工具执行失败。总线可选观察者的失败已隔离；关键检查点与运行记录当前直接落库，数据库失败仍可能中止运行，后续应明确事件持久化的失败与背压策略。
 
-| 契约                                | 建议包含的信息                                                           | 现状                                                      |
-| ----------------------------------- | ------------------------------------------------------------------------ | --------------------------------------------------------- |
-| AgentConfig / ChildConfig           | 主配置、资源绑定、子任务模板；子配置不含 model/mode。                    | Pydantic / 前端类型已有，尚未统一生成全部共享类型。       |
-| RuntimeSpec                         | 已解析发布版本、模型与资源修订、子配置、执行策略。                       | 当前为 snapshot 字典，目标改为类型化对象。                |
-| ExecutionContext                    | 平台注入的 space/user/run/instance、工作区、授权范围、取消与存储接口。   | ToolContext 已移除公开共享状态，改为受限能力接口和深只读 config；仍为进程内契约。 |
-| ToolRequest / ToolOutcome           | 调用名与参数、调用 ID、结果与状态；后续明确错误码和未知结果语义。        | 已有 dataclass；request_id 由总线 Event 携带。            |
-| HookDefinition / HookBinding / HookContext / HookResult | 固定版本的扩展声明、只读阶段上下文、Continue / PatchInput / PatchOutput / Reject 及字段白名单。 | 已实现可信 Python SDK 与运行管道；Hook 包管理与隔离执行仍待实现。 |
-| RunEvent                            | 事件类型、顺序号、run/instance/request/call 关联、必要且脱敏的 payload。 | 数据库顺序号与 SSE 已有；完整类型化事件 schema 待补齐。   |
-| Checkpoint                          | 检查点格式版本、消息、计划、pending 边界、处理器状态和子实例。           | 已有加密保存与旧格式兼容；后续增加显式 schema 迁移。      |
+| 契约                                                    | 建议包含的信息                                                                                  | 现状                                                                              |
+| ------------------------------------------------------- | ----------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| AgentConfig / ChildConfig                               | 主配置、资源绑定、子任务模板；子配置不含 model/mode。                                           | Pydantic / 前端类型已有，尚未统一生成全部共享类型。                               |
+| RuntimeSpec                                             | 已解析发布版本、模型与资源修订、子配置、执行策略。                                              | 当前为 snapshot 字典，目标改为类型化对象。                                        |
+| ExecutionContext                                        | 平台注入的 space/user/run/instance、工作区、授权范围、取消与存储接口。                          | ToolContext 已移除公开共享状态，改为受限能力接口和深只读 config；仍为进程内契约。 |
+| ToolRequest / ToolOutcome                               | 调用名与参数、调用 ID、结果与状态；后续明确错误码和未知结果语义。                               | 已有 dataclass；request_id 由总线 Event 携带。                                    |
+| HookDefinition / HookBinding / HookContext / HookResult | 固定版本的扩展声明、只读阶段上下文、Continue / PatchInput / PatchOutput / Reject 及字段白名单。 | 已实现可信 Python SDK 与运行管道；Hook 包管理与隔离执行仍待实现。                 |
+| RunEvent                                                | 事件类型、顺序号、run/instance/request/call 关联、必要且脱敏的 payload。                        | 数据库顺序号与 SSE 已有；完整类型化事件 schema 待补齐。                           |
+| Checkpoint                                              | 检查点格式版本、消息、计划、pending 边界、处理器状态和子实例。                                  | 已有加密保存与旧格式兼容；后续增加显式 schema 迁移。                              |
 
 **已落地边界：模型调用独立通过 ModelGateway。** Loop 主动请求推理，模型随后选择工具。两类请求可以共享追踪 ID、超时和观测规范，工具总线保持聚焦在能力调用上。
 
@@ -276,16 +278,16 @@ Handler：使用具体能力
 
 ## 8. 数据归属、版本与持久化
 
-| 对象                                 | 含义 / 归属                                                   | 建议负责模块                                 |
-| ------------------------------------ | ------------------------------------------------------------- | -------------------------------------------- |
-| Space / Member                       | 团队与成员身份，所有 Agent 和资源的访问范围。                 | Identity / SpaceService                      |
-| Model / Skill / Tool / KnowledgeBase | 空间可复用资源；当前统一保存于 resources.kind + JSON。        | 各资源服务 + ResourceRepository              |
-| AgentDraft / AgentVersion            | 可编辑配置 / 已发布配置与资源修订。                           | AgentService / ReleaseService                |
-| Session                              | 持续对话及授权历史边界，绑定用户、Agent 和发布版本；包含多个 Run。 | RunService / SessionRepository               |
-| Run                                  | 一次新提问；创建新根实例，多次 Loop、恢复与补充沿用本 Run。   | RunService / RunRepository                   |
+| 对象                                 | 含义 / 归属                                                                                                     | 建议负责模块                                 |
+| ------------------------------------ | --------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
+| Space / Member                       | 团队与成员身份，所有 Agent 和资源的访问范围。                                                                   | Identity / SpaceService                      |
+| Model / Skill / Tool / KnowledgeBase | 空间可复用资源；当前统一保存于 resources.kind + JSON。                                                          | 各资源服务 + ResourceRepository              |
+| AgentDraft / AgentVersion            | 可编辑配置 / 已发布配置与资源修订。                                                                             | AgentService / ReleaseService                |
+| Session                              | 持续对话及授权历史边界，绑定用户、Agent 和发布版本；包含多个 Run。                                              | RunService / SessionRepository               |
+| Run                                  | 一次新提问；创建新根实例，多次 Loop、恢复与补充沿用本 Run。                                                     | RunService / RunRepository                   |
 | AgentInstance / ToolCall             | `(run_id, instance_id)` 标识独立逻辑执行线程；ToolCall 记录调用参数、结果与关联。当前主要在检查点与事件中记录。 | Runtime；以后按查询需要再独立建表。          |
-| Document / Chunk / IndexRevision     | 原文、带行号片段、检索索引修订。                              | KnowledgeService / KnowledgeRepository       |
-| Checkpoint / RunEvent / Artifact     | 可恢复执行状态 / 运行事实 / 生成文件。                        | CheckpointStore / EventStore / ArtifactStore |
+| Document / Chunk / IndexRevision     | 原文、带行号片段、检索索引修订。                                                                                | KnowledgeService / KnowledgeRepository       |
+| Checkpoint / RunEvent / Artifact     | 可恢复执行状态 / 运行事实 / 生成文件。                                                                          | CheckpointStore / EventStore / ArtifactStore |
 
 **历史继承目标：** 会话历史保存各 Run 已提交的交互来源及顺序、所属实例、内容或不可变引用，供新 Run 按当前授权重建；Checkpoint 用于恢复原 Run 的可变执行状态。两者不能以复制旧检查点代替历史继承，来源记录和摘要的关系详见[作用域设计](context-management-design-v0.1.md#scope)。
 
@@ -344,13 +346,13 @@ API 应用依赖 Runtime 公共入口；Runtime 不反向导入 API。模型、R
 
 ## 10. 后续实现顺序与验收
 
-| 顺序                       | 实现内容                                                                                                        | 可验证的完成条件                                                                                                                |
-| -------------------------- | --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| 1 · 收拢业务入口           | 抽完整 RunService / ReleaseService；路由只处理请求响应；按领域补仓储接口。                                      | 网页与 API 共用发布/运行规则；路由不直接创建任务或写发布 SQL。                                                                  |
+| 顺序                       | 实现内容                                                                                                                          | 可验证的完成条件                                                                                                                              |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1 · 收拢业务入口           | 抽完整 RunService / ReleaseService；路由只处理请求响应；按领域补仓储接口。                                                        | 网页与 API 共用发布/运行规则；路由不直接创建任务或写发布 SQL。                                                                                |
 | 2 · 收敛 Runtime 依赖      | 已有 ModelGateway、策略注入、受限 ToolContext 与统一可信 HookManager；继续补 CheckpointStore、EventSink、隔离扩展与独立状态模块。 | Runtime 可在无 FastAPI/真实数据库环境测试；换模型适配器或添加工具无需修改 Loop；Hook 修改经过重校验，恢复复用已保存结果，未知副作用需先核对。 |
-| 3 · 明确资源版本           | Skill 包修订、MCP 注册修订、Wiki 索引修订、统一凭据引用。                                                       | 发布后改资源的影响符合明确规则；旧版本与恢复均可解释、可追踪。                                                                  |
-| 4 · 分离知识流程与前端页面 | 入库/索引与检索拆分；管理台按资源和任务功能拆页。                                                               | 上传不进入 Loop；检索仅访问实例绑定修订；App.vue 回到页面壳职责。                                                               |
-| 5 · 同进程运行可靠性       | 将同步数据库调用收口到异步或线程适配；明确事件落库、背压和恢复策略。                                            | 远程数据库变慢不阻塞所有执行；取消、超时、断线和恢复有可重复验证。                                                              |
+| 3 · 明确资源版本           | Skill 包修订、MCP 注册修订、Wiki 索引修订、统一凭据引用。                                                                         | 发布后改资源的影响符合明确规则；旧版本与恢复均可解释、可追踪。                                                                                |
+| 4 · 分离知识流程与前端页面 | 入库/索引与检索拆分；管理台按资源和任务功能拆页。                                                                                 | 上传不进入 Loop；检索仅访问实例绑定修订；App.vue 回到页面壳职责。                                                                             |
+| 5 · 同进程运行可靠性       | 将同步数据库调用收口到异步或线程适配；明确事件落库、背压和恢复策略。                                                              | 远程数据库变慢不阻塞所有执行；取消、超时、断线和恢复有可重复验证。                                                                            |
 
 会话连续性还需验收：一次请求多次 Loop 的线程标识不变，新提问更换 Run 与根实例，恢复和补充保留原标识；新提问可追溯超过 6 个 Run 的工具、Skill、知识与文件历史及失败/取消记录，压缩后仍可授权回查；旧 pending、取消与单次 Run 的执行预算计数不进入新 Run 执行，活动 Run 期间的新提问继续被拒绝，子实例未导出的内部记录和凭据不可见。
 

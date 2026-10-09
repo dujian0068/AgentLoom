@@ -1,0 +1,93 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="1450" viewBox="0 0 1440 1450" role="img" aria-labelledby="title desc">
+<title id="title">AgentLoom 当前实现架构</title>
+<desc id="desc">2026-10-09，对照代码9941e31。单进程模块化单体：Vue与API接入应用服务，发布配置交给Runtime组装。统一Loop通过模型网关决策，通过进程内EventBus请求工具处理器；Hooks覆盖执行边界，SQL保存事件、历史与检查点，文件保存在隔离本地或共享POSIX工作区。MemoryService、隔离Hook Worker和分布式调度待实现。</desc>
+<defs><marker id="arrow" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8" fill="none" stroke="#6c809a" stroke-width="1.5"/></marker></defs>
+<style>text{font-family:"PingFang SC","Noto Sans CJK SC",sans-serif} .title{font-weight:650} </style>
+<rect width="1440" height="1450" fill="#fff"/>
+
+<text x="36" y="42" font-size="17" fill="#2c568f" font-weight="650">AGENTLOOM  /  CURRENT IMPLEMENTATION</text>
+<text x="36" y="88" font-size="36" fill="#21344c" font-weight="650">织点 · 以 Agent Runtime 为核心</text>
+<text x="36" y="123" font-size="19" fill="#4c6078" font-weight="400">代码基线 9941e31 · 2026-10-09 · 实线为当前模块与调用边界；底部虚线为后续建设</text>
+<rect x="36" y="149" width="1368" height="173" rx="12" fill="#f0f8f5" stroke="#277a70" stroke-width="1.5"/>
+<text x="56" y="184" font-size="25" fill="#277a70" font-weight="650">平台接入与应用服务</text>
+<text x="56" y="214" font-size="18" fill="#4c6078" font-weight="400">配置与发布 / 运行准入 / 记录与展示；当前一个 FastAPI 进程</text>
+<rect x="56" y="232" width="312" height="70" rx="12" fill="#fff" stroke="#cfdae6" stroke-width="1.5"/>
+<text x="72" y="262" font-size="22" fill="#277a70" font-weight="650">Vue 工作台 / 发布应用</text>
+<text x="72" y="291" font-size="18" fill="#4c6078" font-weight="400">配置 / 发布应用 / 执行记录</text>
+<rect x="386" y="232" width="312" height="70" rx="12" fill="#fff" stroke="#cfdae6" stroke-width="1.5"/>
+<text x="402" y="262" font-size="22" fill="#277a70" font-weight="650">HTTP API / SSE</text>
+<text x="402" y="291" font-size="18" fill="#4c6078" font-weight="400">认证、空间与个人运行权限</text>
+<rect x="716" y="232" width="312" height="70" rx="12" fill="#fff" stroke="#cfdae6" stroke-width="1.5"/>
+<text x="732" y="262" font-size="22" fill="#277a70" font-weight="650">资源与发布</text>
+<text x="732" y="291" font-size="18" fill="#4c6078" font-weight="400">模型 / Skill / MCP / 知识 / Hooks</text>
+<rect x="1046" y="232" width="338" height="70" rx="12" fill="#fff" stroke="#cfdae6" stroke-width="1.5"/>
+<text x="1062" y="262" font-size="22" fill="#277a70" font-weight="650">会话与 Run 服务</text>
+<text x="1062" y="291" font-size="18" fill="#4c6078" font-weight="400">历史、工作区绑定、启动与恢复</text>
+<path d="M718 328 L718 349" stroke="#6c809a" stroke-width="1.6" fill="none" marker-end="url(#arrow)"/>
+<rect x="36" y="358" width="1368" height="399" rx="12" fill="#f6f5fc" stroke="#5d63ac" stroke-width="1.5"/>
+<text x="56" y="393" font-size="25" fill="#5d63ac" font-weight="650">Agent Runtime · 核心执行内核</text>
+<text x="56" y="423" font-size="18" fill="#4c6078" font-weight="400">runtime.create_engine 组装 · Protocol / 模块身份 / 配置注入 · Runtime 不反向依赖平台 API</text>
+<rect x="56" y="442" width="256" height="92" rx="12" fill="#ebeafa" stroke="#cfdae6" stroke-width="1.5"/>
+<text x="72" y="472" font-size="22" fill="#5d63ac" font-weight="650">统一 Loop</text>
+<text x="72" y="501" font-size="18" fill="#4c6078" font-weight="400">决策 → 行动 → 反馈</text>
+<text x="72" y="527" font-size="18" fill="#4c6078" font-weight="400">继续 / 完成 · engine.py</text>
+<rect x="330" y="442" width="310" height="92" rx="12" fill="#fff" stroke="#cfdae6" stroke-width="1.5"/>
+<text x="346" y="472" font-size="22" fill="#5d63ac" font-weight="650">ModelGateway</text>
+<text x="346" y="501" font-size="18" fill="#4c6078" font-weight="400">Chat Completions / 统一响应</text>
+<text x="346" y="527" font-size="18" fill="#4c6078" font-weight="400">DeepSeek / OpenAI</text>
+<rect x="658" y="442" width="326" height="92" rx="12" fill="#fff" stroke="#cfdae6" stroke-width="1.5"/>
+<text x="674" y="472" font-size="22" fill="#5d63ac" font-weight="650">ContextManager</text>
+<text x="674" y="501" font-size="18" fill="#4c6078" font-weight="400">连续历史 / 模型视图 / 预算</text>
+<text x="674" y="527" font-size="18" fill="#4c6078" font-weight="400">80% 与轮数触发主动压缩</text>
+<rect x="1002" y="442" width="382" height="92" rx="12" fill="#fff" stroke="#cfdae6" stroke-width="1.5"/>
+<text x="1018" y="472" font-size="22" fill="#5d63ac" font-weight="650">策略与执行状态</text>
+<text x="1018" y="501" font-size="18" fill="#4c6078" font-weight="400">ReAct / 自动 Plan / 完成检查</text>
+<text x="1018" y="527" font-size="18" fill="#4c6078" font-weight="400">子实例 / 调用预算 / 检查点</text>
+<rect x="56" y="554" width="1328" height="141" rx="12" fill="#fff8e8" stroke="#c9a65a" stroke-width="1.5"/>
+<text x="74" y="587" font-size="24" fill="#876321" font-weight="650">HookManager · 已实现的可信 Python 扩展</text>
+<text x="74" y="620" font-size="19" fill="#4c6078" font-weight="400">挂点契约 / 注册与绑定 / 有序执行 / 超时与恢复 · 模型、工具、上下文、任务；Embedding 使用独立操作记录</text>
+<text x="74" y="655" font-size="21" fill="#876321" font-weight="400">保存有效输入 → 实际调用 → 保存真实结果 → 后置 Hook → 保存有效输出</text>
+<text x="74" y="681" font-size="18" fill="#4c6078" font-weight="400">无 Hook 也保留调用阶段；代码与契约版本进入检查点；上传隔离 Worker 待实现</text>
+<text x="56" y="733" font-size="19" fill="#5d63ac" font-weight="400">可替换：模型网关 / 上下文 / 压缩 / 完成检查 / 执行策略 / Hooks；工具细节留在执行层。</text>
+<path d="M718 764 L718 788" stroke="#6c809a" stroke-width="1.6" fill="none" marker-end="url(#arrow)"/>
+<rect x="36" y="797" width="1368" height="106" rx="12" fill="#eef7fb" stroke="#2f718e" stroke-width="1.5"/>
+<text x="56" y="832" font-size="25" fill="#2f718e" font-weight="650">进程内 EventBus → ToolRuntime</text>
+<text x="56" y="862" font-size="18" fill="#4c6078" font-weight="400">单处理器执行请求；关联结果返回 Loop；通知支持多个 Observer。当前不是跨机器消息队列。</text>
+<text x="56" y="890" font-size="20" fill="#2f718e" font-weight="400">ToolDefinition / Registry → Hook → 权限、参数与策略校验 → Handler → 真实结果与有效观察</text>
+<path d="M718 910 L718 933" stroke="#6c809a" stroke-width="1.6" fill="none" marker-end="url(#arrow)"/>
+<rect x="36" y="942" width="1368" height="196" rx="12" fill="#fffbf2" stroke="#9a722c" stroke-width="1.5"/>
+<text x="56" y="977" font-size="25" fill="#9a722c" font-weight="650">能力适配与执行</text>
+<text x="56" y="1007" font-size="18" fill="#4c6078" font-weight="400">由宿主提供可信资源范围；模型不能指定空间、存储根目录或平台凭据</text>
+<rect x="56" y="1025" width="254" height="92" rx="12" fill="#fff" stroke="#cfdae6" stroke-width="1.5"/>
+<text x="72" y="1055" font-size="22" fill="#9a722c" font-weight="650">文件与沙箱</text>
+<text x="72" y="1084" font-size="18" fill="#4c6078" font-weight="400">10 个系统工具 / Docker</text>
+<text x="72" y="1110" font-size="18" fill="#4c6078" font-weight="400">本地或共享 POSIX 工作区</text>
+<rect x="326" y="1025" width="254" height="92" rx="12" fill="#fff" stroke="#cfdae6" stroke-width="1.5"/>
+<text x="342" y="1055" font-size="22" fill="#9a722c" font-weight="650">Skill</text>
+<text x="342" y="1084" font-size="18" fill="#4c6078" font-weight="400">目录 / 公开 HTTPS Git</text>
+<text x="342" y="1110" font-size="18" fill="#4c6078" font-weight="400">按需加载 / 只读技能挂载</text>
+<rect x="596" y="1025" width="254" height="92" rx="12" fill="#fff" stroke="#cfdae6" stroke-width="1.5"/>
+<text x="612" y="1055" font-size="22" fill="#9a722c" font-weight="650">MCP</text>
+<text x="612" y="1084" font-size="18" fill="#4c6078" font-weight="400">外部 HTTP / SSE</text>
+<text x="612" y="1110" font-size="18" fill="#4c6078" font-weight="400">托管 Python stdio</text>
+<rect x="866" y="1025" width="254" height="92" rx="12" fill="#fff" stroke="#cfdae6" stroke-width="1.5"/>
+<text x="882" y="1055" font-size="22" fill="#9a722c" font-weight="650">知识检索</text>
+<text x="882" y="1084" font-size="18" fill="#4c6078" font-weight="400">SQL 原文 / 分块 / 向量</text>
+<text x="882" y="1110" font-size="18" fill="#4c6078" font-weight="400">RAG / Embedding Hooks</text>
+<rect x="1136" y="1025" width="248" height="92" rx="12" fill="#fff" stroke="#cfdae6" stroke-width="1.5"/>
+<text x="1152" y="1055" font-size="22" fill="#9a722c" font-weight="650">计划与委派</text>
+<text x="1152" y="1084" font-size="18" fill="#4c6078" font-weight="400">update_plan / 子任务</text>
+<text x="1152" y="1110" font-size="18" fill="#4c6078" font-weight="400">继承模型 / 独立上下文</text>
+<rect x="36" y="1164" width="669" height="124" rx="12" fill="#f5f8fc" stroke="#cfdae6" stroke-width="1.5"/>
+<text x="56" y="1197" font-size="23" fill="#375b86" font-weight="650">持久化：SQL 与文件分别保存</text>
+<text x="56" y="1228" font-size="18" fill="#4c6078" font-weight="400">PostgreSQL / SQLite：配置、发布、Run、事件、历史、检查点</text>
+<text x="56" y="1258" font-size="18" fill="#4c6078" font-weight="400">文件：导入包、根密钥、会话与子实例工作区、隔离标记</text>
+<rect x="723" y="1164" width="681" height="124" rx="12" fill="#f5f8fc" stroke="#cfdae6" stroke-width="1.5"/>
+<text x="743" y="1197" font-size="23" fill="#375b86" font-weight="650">观测与当前部署边界</text>
+<text x="743" y="1228" font-size="18" fill="#4c6078" font-weight="400">保存事件 → SSE 续接 / 页面；无 token 级流式输出</text>
+<text x="743" y="1258" font-size="18" fill="#4c6078" font-weight="400">Run 句柄在内存；共享文件不等于支持多 Worker 或集群</text>
+<rect x="36" y="1313" width="1368" height="91" rx="12" fill="#fff" stroke="#acb7c6" stroke-width="1.5" stroke-dasharray="7 5"/>
+<text x="56" y="1346" font-size="23" fill="#66758b" font-weight="650">后续建设 · 尚未实现</text>
+<text x="56" y="1380" font-size="20" fill="#4c6078" font-weight="400">持久调度 / 租约与 fencing   ·   隔离 Hook Worker   ·   MemoryService   ·   完整资源来源与撤销过滤</text>
+<text x="36" y="1431" font-size="17" fill="#6d7f94" font-weight="400">设计与代码索引：docs/technical-design.md · runtime-design.md · platform-api-data.md · deployment-operations.md</text>
+</svg>

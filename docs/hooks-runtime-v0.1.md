@@ -1,5 +1,7 @@
 # Hooks 运行时使用说明 v0.1
 
+> **专题参考。** 当前跨模块架构与边界见[总体技术设计](technical-design.md)、[Runtime 详细设计](runtime-design.md)、[平台/API/数据](platform-api-data.md)和[部署运维](deployment-operations.md)，统一核对基线为 `9941e31`（2026-10-09）。本文保留专题契约和阶段验证。
+
 更新：2026-10-09。本文描述当前代码接口；完整目标设计见[统一 Hooks 设计](hooks-design-v0.1.md)。
 
 **已实现可信 Python Hooks 的注册、版本绑定、有序处理、字段校验、超时、取消和检查点恢复。** 同一个 `HookManager` 注入模型、工具、上下文、运行与子任务边界；Loop 不根据扩展 ID 分支。平台 API 可以绑定部署时注册的可信扩展，发布时冻结版本清单。团队上传 / Git 导入 Hook、管理页面和隔离 Worker 尚未开放。
@@ -8,14 +10,14 @@ Embedding 也复用这一机制，由知识库固定处理链，并在文档入�
 
 ## 1. 模块与职责
 
-| 模块 | 代码位置 | 职责 |
-| --- | --- | --- |
-| HookPointRegistry | `packages/runtime/agentloom_runtime/hooks/registry.py` | 挂点 Schema、可写字段、允许的返回动作。 |
-| HookRegistry | 同上 | 注册可信异步函数、代码版本、配置 Schema、重算声明。 |
-| HookManager | `hooks/manager.py` | 冻结绑定、匹配作用域、稳定排序、逐次校验补丁、保存管道进度。 |
-| HookExecutor | `hooks/executor.py` | 执行可信函数，限制单次时间，传播取消并关闭残留任务。 |
-| execute_operation | `hooks/operation.py` | 包围真实动作，区分最终输入、真实结果和有效视图，管理错误与清理。 |
-| 执行边界 | `model_hooks.py`、`embedding_hooks.py`、`tool_runtime.py`、`hooked_context.py`、`lifecycle_hooks.py` | 提供业务载荷，执行不可绕过的授权、协议与预算校验；运行生命周期独立于 Loop。 |
+| 模块              | 代码位置                                                                                             | 职责                                                                        |
+| ----------------- | ---------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| HookPointRegistry | `packages/runtime/agentloom_runtime/hooks/registry.py`                                               | 挂点 Schema、可写字段、允许的返回动作。                                     |
+| HookRegistry      | 同上                                                                                                 | 注册可信异步函数、代码版本、配置 Schema、重算声明。                         |
+| HookManager       | `hooks/manager.py`                                                                                   | 冻结绑定、匹配作用域、稳定排序、逐次校验补丁、保存管道进度。                |
+| HookExecutor      | `hooks/executor.py`                                                                                  | 执行可信函数，限制单次时间，传播取消并关闭残留任务。                        |
+| execute_operation | `hooks/operation.py`                                                                                 | 包围真实动作，区分最终输入、真实结果和有效视图，管理错误与清理。            |
+| 执行边界          | `model_hooks.py`、`embedding_hooks.py`、`tool_runtime.py`、`hooked_context.py`、`lifecycle_hooks.py` | 提供业务载荷，执行不可绕过的授权、协议与预算校验；运行生命周期独立于 Loop。 |
 
 `EventBus.subscribe` 仍是观察通知。改变参数或阻止动作必须使用 Hooks；观察者不会变成执行拦截器。
 
@@ -104,18 +106,20 @@ PYTHONPATH=apps/api:packages/runtime:. .venv/bin/uvicorn trusted_api:app --host 
 
 ```json
 {
-  "hooks": [{
-    "binding_id": "clean-answer",
-    "hook_id": "trim-answer",
-    "version": "v1",
-    "point": "model.chat.after",
-    "purposes": ["action"],
-    "instances": ["main", "child"],
-    "priority": 100,
-    "timeout": 1.0,
-    "failure_policy": "block",
-    "config": {}
-  }]
+  "hooks": [
+    {
+      "binding_id": "clean-answer",
+      "hook_id": "trim-answer",
+      "version": "v1",
+      "point": "model.chat.after",
+      "purposes": ["action"],
+      "instances": ["main", "child"],
+      "priority": 100,
+      "timeout": 1.0,
+      "failure_policy": "block",
+      "config": {}
+    }
+  ]
 }
 ```
 
@@ -123,21 +127,21 @@ PYTHONPATH=apps/api:packages/runtime:. .venv/bin/uvicorn trusted_api:app --host 
 
 ## 3. 已接入挂点与可写范围
 
-| 挂点 | 当前允许的结果与限制 |
-| --- | --- |
-| `model.chat.before` | `Continue`、`Reject`，或修改追加的 user 文本、`temperature`、`top_p`、`max_tokens`。原有消息、模型绑定、tools / Schema、purpose 受保护；输出上限不能超过发布预算。 |
-| `model.chat.after` | 只修改 `content` 和 `annotations`；tool_calls、用量和真实状态保持原值，最后再次验证模型协议。 |
-| `model.embedding.before` | 只修改带固定索引的 `texts`，或 `Reject`；条数、索引位置、模型与索引签名受保护。绑定由知识库固定。 |
-| `model.embedding.after` | 只读向量、数量 / 维度、用量及请求标识，需要 `observation=True`；真实响应先保存，完成校验后才进入观察阶段。 |
-| `tool.before` | 只修改 `arguments`，或 `Reject`。每次修改以及实际执行前均验证 Schema 与授权；具体 Handler 继续检查路径等限制。 |
-| `tool.after` | 只修改 `value` 和 `annotations`。真实成功 / 失败、调用身份和 `evidence_arguments` 不可改写。 |
-| `context.prepare.before` | 添加 `additional_messages`（user 文本），或 `Reject`。附加材料只进入本次请求，并带扩展来源提示；不自动追加到永久对话。 |
-| `context.prepare.after` | 只读观察，需要 `observation=True`。 |
-| `context.compact.before` | 观察或 `Reject`；当前不开放任意选择消息覆盖范围。 |
-| `context.compact.after` | 只修改策略明确声明的 `summary` 文本；任务、计划、工具关联、覆盖状态保持不变，并重检预算。 |
-| `run.before` / `subagent.before` | 观察或 `Reject`；任务文本和发布身份不可修改。 |
-| `run.after` / `subagent.after` | 允许附加 `annotations`，不修改已完成任务的结果与状态。 |
-| `operation.error` / `operation.finally` | 只读诊断，需要 `observation=True`；不能替换结果、重试或改变实际状态。 |
+| 挂点                                    | 当前允许的结果与限制                                                                                                                                               |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `model.chat.before`                     | `Continue`、`Reject`，或修改追加的 user 文本、`temperature`、`top_p`、`max_tokens`。原有消息、模型绑定、tools / Schema、purpose 受保护；输出上限不能超过发布预算。 |
+| `model.chat.after`                      | 只修改 `content` 和 `annotations`；tool_calls、用量和真实状态保持原值，最后再次验证模型协议。                                                                      |
+| `model.embedding.before`                | 只修改带固定索引的 `texts`，或 `Reject`；条数、索引位置、模型与索引签名受保护。绑定由知识库固定。                                                                  |
+| `model.embedding.after`                 | 只读向量、数量 / 维度、用量及请求标识，需要 `observation=True`；真实响应先保存，完成校验后才进入观察阶段。                                                         |
+| `tool.before`                           | 只修改 `arguments`，或 `Reject`。每次修改以及实际执行前均验证 Schema 与授权；具体 Handler 继续检查路径等限制。                                                     |
+| `tool.after`                            | 只修改 `value` 和 `annotations`。真实成功 / 失败、调用身份和 `evidence_arguments` 不可改写。                                                                       |
+| `context.prepare.before`                | 添加 `additional_messages`（user 文本），或 `Reject`。附加材料只进入本次请求，并带扩展来源提示；不自动追加到永久对话。                                             |
+| `context.prepare.after`                 | 只读观察，需要 `observation=True`。                                                                                                                                |
+| `context.compact.before`                | 观察或 `Reject`；当前不开放任意选择消息覆盖范围。                                                                                                                  |
+| `context.compact.after`                 | 只修改策略明确声明的 `summary` 文本；任务、计划、工具关联、覆盖状态保持不变，并重检预算。                                                                          |
+| `run.before` / `subagent.before`        | 观察或 `Reject`；任务文本和发布身份不可修改。                                                                                                                      |
+| `run.after` / `subagent.after`          | 允许附加 `annotations`，不修改已完成任务的结果与状态。                                                                                                             |
+| `operation.error` / `operation.finally` | 只读诊断，需要 `observation=True`；不能替换结果、重试或改变实际状态。                                                                                              |
 
 尚未引入可选 ContextBlock 的独立授权清单，因此模型前置 Hook 当前采用更严格规则：保留所有既有消息，只允许追加 user 文本。自定义压缩策略若不声明摘要位置，其返回视图对后置 Hook 保持只读。
 
@@ -185,14 +189,14 @@ restored_hooks = HookManager(
 
 一次逻辑操作保存 `original_input`、`final_input`、`raw_output` 和 `effective_output`，以及 before / after 进度与诊断。真实模型响应或工具结果先持久化，再运行 after。工具结果的原始记录与给模型的投影视图分别进入会话管理。
 
-| 中断位置 | 恢复行为 |
-| --- | --- |
-| before 拒绝 | 工具返回结构化拒绝信息供模型调整；底层操作未执行。模型或生命周期拒绝终止当前执行。 |
-| before / after 扩展失败 | 可安全重算的未完成扩展可以续跑；已完成扩展不再执行。未声明可重算的扩展进入 `HookRecoveryRequired`。 |
-| 真实结果已经保存，after 失败 | 继续处理 `raw_output`，不会为了后处理重新调用工具或模型。 |
-| 工具执行中断，结果未知 | 普通工具返回“结果未知”的反馈，要求先核对实际状态；不会盲目重放。明确声明可恢复的委派等能力按各自恢复契约继续。 |
-| 模型已发出但响应未知 | 默认停止；显式允许重试后才重新请求，可能产生额外计费。已保存结果的模型调用不需要重试。 |
-| 检查点保存失败 | 抛出 `ToolPersistenceError`，不把持久化故障伪装成普通工具业务错误。 |
+| 中断位置                     | 恢复行为                                                                                                       |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| before 拒绝                  | 工具返回结构化拒绝信息供模型调整；底层操作未执行。模型或生命周期拒绝终止当前执行。                             |
+| before / after 扩展失败      | 可安全重算的未完成扩展可以续跑；已完成扩展不再执行。未声明可重算的扩展进入 `HookRecoveryRequired`。            |
+| 真实结果已经保存，after 失败 | 继续处理 `raw_output`，不会为了后处理重新调用工具或模型。                                                      |
+| 工具执行中断，结果未知       | 普通工具返回“结果未知”的反馈，要求先核对实际状态；不会盲目重放。明确声明可恢复的委派等能力按各自恢复契约继续。 |
+| 模型已发出但响应未知         | 默认停止；显式允许重试后才重新请求，可能产生额外计费。已保存结果的模型调用不需要重试。                         |
+| 检查点保存失败               | 抛出 `ToolPersistenceError`，不把持久化故障伪装成普通工具业务错误。                                            |
 
 异常入口为 `HookError`，具体包括 `HookFailed`、`HookRejected` 和 `HookRecoveryRequired`。`engine.resume(retry_unknown_models=True)` 明确授权重试结果未知的模型请求；默认 `False`。API 恢复请求采用同名布尔字段，未确认时返回 409。这不授权重复结果未知的工具副作用。
 

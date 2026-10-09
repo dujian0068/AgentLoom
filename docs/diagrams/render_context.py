@@ -5,7 +5,7 @@ OUT = Path(__file__).parent
 W, H = 1580, 1770
 parts = [f'''<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}" role="img" aria-labelledby="title description">
 <title id="title">AgentLoom 上下文管理目标架构</title>
-<desc id="description">ContextManager 是 Agent Runtime 的内部模块，包含记录与来源、调用视图装配、Token 预算、主动压缩、激活资源跟踪及主子 Agent 作用域六个逻辑组件。每次新提问创建独立执行线程并继承完整会话历史，同一提问的多个 Loop 共用线程上下文。压缩默认在有效输入预算占用率达到80%时触发，也可配置用户提问轮数或模型步骤阈值，任一条件达到即触发，目标占用率建议60%。策略随发布冻结；计数基线随历史继承和检查点恢复。Loop 准备上下文，模型网关运行 Hook 后再次校验预算。工具通过事件总线与 ToolRuntime 执行；实际结果与有效视图分开保存。检查点关联源记录版本、摘要和激活资源引用。压缩仅替换视图，保留执行事实。完整 ContextManager 与 Hooks 是待实现设计。</desc>
+<desc id="description">ContextManager 是 Agent Runtime 的内部模块，包含记录与来源、调用视图装配、Token 预算、主动压缩、激活资源跟踪及主子 Agent 作用域六个逻辑组件。每次新提问创建独立执行线程并继承完整会话历史，同一提问的多个 Loop 共用线程上下文。压缩默认在有效输入预算占用率达到80%时触发，也可配置用户提问轮数或模型步骤阈值，任一条件达到即触发，目标占用率建议60%。策略随发布冻结；计数基线随历史继承和检查点恢复。Loop 准备上下文，模型网关运行 Hook 后再次校验预算。工具通过事件总线与 ToolRuntime 执行；实际结果与有效视图分开保存。检查点关联源记录版本、摘要和激活资源引用。压缩仅替换视图，保留执行事实。连续记录、预算压缩与可信 Hooks 已实现；完整类型化来源、资源追踪与 Memory 仍为目标。</desc>
 <defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto-start-reverse"><path d="M0 0 L7 4 L0 8" fill="none" stroke="#8396ad" stroke-width="1.5"/></marker></defs>
 <style>text{{font-family:"PingFang SC","Hiragino Sans GB","Noto Sans CJK SC",sans-serif}}</style><rect width="{W}" height="{H}" fill="#fff"/>''']
 def rect(x,y,w,h,fill='#fff',stroke='#d7e1ec',r=12,dash=False):
@@ -25,7 +25,7 @@ text(40,42,'AGENTLOOM  /  CONTEXT MANAGEMENT',16,'#2862b3',650)
 text(40,91,'织点 · 上下文管理',38,'#20344b',650)
 text(40,126,'把运行资料组织为每次模型调用需要的上下文，并保留可恢复的执行事实。',20)
 rect(1270,50,270,44,'#fff7e3','#d9bf8c',22)
-text(1405,80,'目标架构 v0.1 · 待实现',20,'#8a601e',600,'middle')
+text(1405,80,'目标职责 · 部分已实现',20,'#8a601e',600,'middle')
 for x,title,name,detail in [(40,'发布策略与资源目录','ContextPolicy / Skill Catalog','固定发布修订 · 按需加载正文与附件'),(550,'用户输入与会话历史','User Input / History','历次问答 · 模型 / 工具 / Skill 交互'),(1060,'工具、知识与子任务结果','Tool / RAG / Task Results','片段与定位 · 产物引用 · 执行状态')]:
     card(x,154,480,104,title,name,detail,color='#277c78',tint='#f0f9f6')
 arrow(790,267,790,292)
@@ -35,7 +35,7 @@ text(50,343,'Agent Runtime · 内核内部的逻辑模块',26,'#405aa2',650)
 text(1529,342,'新提问新线程 · 多 Loop 共用上下文',18,'#536ba4',anchor='end')
 rect(50,371,1065,564,'#f0f4ff','#7792c9')
 text(70,411,'ContextManager · 上下文管理',28,'#405aa2',650)
-text(1094,410,'下列六个组件均待实现',18,'#6d7fa2',anchor='end')
+text(1094,410,'六项逻辑职责 · 非现有类清单',18,'#6d7fa2',anchor='end')
 modules=[('记录与来源','ContextRecordStore','会话顺序 · 线程归属 · 历史快照'),('调用视图装配','ContextAssembler','按 purpose 选择 · 去重 · 保留边界'),('Token 预算','BudgetPolicy','完整请求计量 · 输出预留 · 硬上限'),('主动压缩','CompactionPolicy','80% / 轮数触发 · 按配置压缩'),('激活资源','ResourceTracker','Skill 修订 · 引用 · 生命周期'),('主子作用域','InstanceScope','独立上下文 · 明确委派与结果出口')]
 for i,(title,name,detail) in enumerate(modules):
     card(70+(i%3)*345,446+(i//3)*129,330,110,title,name,detail)
@@ -45,7 +45,7 @@ text(70,850,'prepare 生成调用工作副本；结果按 operation_id 与源版
 text(70,889,'新线程继承完整交互；压缩保留来源；恢复沿用原线程与历史快照。',20)
 rect(1140,371,390,564,'#fff7e3','#c89943')
 text(1160,411,'HookManager',27,'#8a601e',650)
-text(1160,445,'统一扩展接口 · 待实现',19,'#8a601e')
+text(1160,445,'可信 Python 扩展已实现',19,'#8a601e')
 for y,title,english in [(480,'上下文装配与压缩','Context lifecycle'),(584,'模型调用前后','model.chat.before / after'),(688,'工具执行前后','tool.before / after')]:
     card(1160,y,350,86,title,english,color='#8a601e',title_size=21)
 text(1160,825,'类型化补丁 → 校验 → 有效视图',19,'#8a601e',550)
@@ -72,8 +72,8 @@ text(287,1528,'依赖版本  /  摘要与压缩计数基线  /  资源引用  / 
 text(60,1572,'压缩失败保留旧视图；恢复后复用已保存的实际结果，不因上下文或后置 Hook 失败重放外部操作。',20)
 rect(40,1624,1500,96,'#fff','#bcc9dc',dash=True)
 text(60,1661,'实现状态',22,'#526982',650)
-text(200,1661,'当前已有 frame.messages 与 context.py 字符阈值压缩；完整 ContextManager 与 Hooks 尚待实现。',20)
+text(200,1661,'连续记录、预算压缩与可信 Hooks 已实现；完整来源追踪、资源生命周期和 Memory 待建。',20)
 text(60,1698,'图中六个组件是 Runtime 内部的职责划分，不要求拆成六个进程或独立服务。',19)
-text(40,1751,'Context Management v0.1 · AgentLoom · 与独立上下文管理设计文档配套',17,'#77889c')
+text(40,1751,'Context Management · 目标职责 · 2026-10-09 状态更新 · 当前实现见 runtime-design.md',17,'#77889c')
 parts.append('</svg>')
 (OUT/'context-management.svg').write_text('\n'.join(parts),encoding='utf-8')

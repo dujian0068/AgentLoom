@@ -1,13 +1,13 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1580" height="1770" viewBox="0 0 1580 1770" role="img" aria-labelledby="title description">
 <title id="title">AgentLoom 上下文管理目标架构</title>
-<desc id="description">ContextManager 是 Agent Runtime 的内部模块，包含记录与来源、调用视图装配、Token 预算、主动压缩、激活资源跟踪及主子 Agent 作用域六个逻辑组件。每次新提问创建独立执行线程并继承完整会话历史，同一提问的多个 Loop 共用线程上下文。压缩默认在有效输入预算占用率达到80%时触发，也可配置用户提问轮数或模型步骤阈值，任一条件达到即触发，目标占用率建议60%。策略随发布冻结；计数基线随历史继承和检查点恢复。Loop 准备上下文，模型网关运行 Hook 后再次校验预算。工具通过事件总线与 ToolRuntime 执行；实际结果与有效视图分开保存。检查点关联源记录版本、摘要和激活资源引用。压缩仅替换视图，保留执行事实。完整 ContextManager 与 Hooks 是待实现设计。</desc>
+<desc id="description">ContextManager 是 Agent Runtime 的内部模块，包含记录与来源、调用视图装配、Token 预算、主动压缩、激活资源跟踪及主子 Agent 作用域六个逻辑组件。每次新提问创建独立执行线程并继承完整会话历史，同一提问的多个 Loop 共用线程上下文。压缩默认在有效输入预算占用率达到80%时触发，也可配置用户提问轮数或模型步骤阈值，任一条件达到即触发，目标占用率建议60%。策略随发布冻结；计数基线随历史继承和检查点恢复。Loop 准备上下文，模型网关运行 Hook 后再次校验预算。工具通过事件总线与 ToolRuntime 执行；实际结果与有效视图分开保存。检查点关联源记录版本、摘要和激活资源引用。压缩仅替换视图，保留执行事实。连续记录、预算压缩与可信 Hooks 已实现；完整类型化来源、资源追踪与 Memory 仍为目标。</desc>
 <defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto-start-reverse"><path d="M0 0 L7 4 L0 8" fill="none" stroke="#8396ad" stroke-width="1.5"/></marker></defs>
 <style>text{font-family:"PingFang SC","Hiragino Sans GB","Noto Sans CJK SC",sans-serif}</style><rect width="1580" height="1770" fill="#fff"/>
 <text x="40" y="42" font-size="16" fill="#2862b3" font-weight="650" text-anchor="start">AGENTLOOM  /  CONTEXT MANAGEMENT</text>
 <text x="40" y="91" font-size="38" fill="#20344b" font-weight="650" text-anchor="start">织点 · 上下文管理</text>
 <text x="40" y="126" font-size="20" fill="#576d85" font-weight="400" text-anchor="start">把运行资料组织为每次模型调用需要的上下文，并保留可恢复的执行事实。</text>
 <rect x="1270" y="50" width="270" height="44" rx="22" fill="#fff7e3" stroke="#d9bf8c" stroke-width="1.5"/>
-<text x="1405" y="80" font-size="20" fill="#8a601e" font-weight="600" text-anchor="middle">目标架构 v0.1 · 待实现</text>
+<text x="1405" y="80" font-size="20" fill="#8a601e" font-weight="600" text-anchor="middle">目标职责 · 部分已实现</text>
 <rect x="40" y="154" width="480" height="104" rx="12" fill="#f0f9f6" stroke="#d7e1ec" stroke-width="1.5"/>
 <text x="56" y="184" font-size="22" fill="#277c78" font-weight="650" text-anchor="start">发布策略与资源目录</text>
 <text x="56" y="212" font-size="18" fill="#277c78" font-weight="400" text-anchor="start">ContextPolicy / Skill Catalog</text>
@@ -27,7 +27,7 @@
 <text x="1529" y="342" font-size="18" fill="#536ba4" font-weight="400" text-anchor="end">新提问新线程 · 多 Loop 共用上下文</text>
 <rect x="50" y="371" width="1065" height="564" rx="12" fill="#f0f4ff" stroke="#7792c9" stroke-width="1.5"/>
 <text x="70" y="411" font-size="28" fill="#405aa2" font-weight="650" text-anchor="start">ContextManager · 上下文管理</text>
-<text x="1094" y="410" font-size="18" fill="#6d7fa2" font-weight="400" text-anchor="end">下列六个组件均待实现</text>
+<text x="1094" y="410" font-size="18" fill="#6d7fa2" font-weight="400" text-anchor="end">六项逻辑职责 · 非现有类清单</text>
 <rect x="70" y="446" width="330" height="110" rx="12" fill="#fff" stroke="#d7e1ec" stroke-width="1.5"/>
 <text x="86" y="476" font-size="22" fill="#405aa2" font-weight="650" text-anchor="start">记录与来源</text>
 <text x="86" y="504" font-size="18" fill="#405aa2" font-weight="400" text-anchor="start">ContextRecordStore</text>
@@ -62,7 +62,7 @@
 <text x="70" y="889" font-size="20" fill="#576d85" font-weight="400" text-anchor="start">新线程继承完整交互；压缩保留来源；恢复沿用原线程与历史快照。</text>
 <rect x="1140" y="371" width="390" height="564" rx="12" fill="#fff7e3" stroke="#c89943" stroke-width="1.5"/>
 <text x="1160" y="411" font-size="27" fill="#8a601e" font-weight="650" text-anchor="start">HookManager</text>
-<text x="1160" y="445" font-size="19" fill="#8a601e" font-weight="400" text-anchor="start">统一扩展接口 · 待实现</text>
+<text x="1160" y="445" font-size="19" fill="#8a601e" font-weight="400" text-anchor="start">可信 Python 扩展已实现</text>
 <rect x="1160" y="480" width="350" height="86" rx="12" fill="#fff" stroke="#d7e1ec" stroke-width="1.5"/>
 <text x="1176" y="510" font-size="21" fill="#8a601e" font-weight="650" text-anchor="start">上下文装配与压缩</text>
 <text x="1176" y="538" font-size="18" fill="#8a601e" font-weight="400" text-anchor="start">Context lifecycle</text>
@@ -133,7 +133,7 @@
 <text x="60" y="1572" font-size="20" fill="#576d85" font-weight="400" text-anchor="start">压缩失败保留旧视图；恢复后复用已保存的实际结果，不因上下文或后置 Hook 失败重放外部操作。</text>
 <rect x="40" y="1624" width="1500" height="96" rx="12" fill="#fff" stroke="#bcc9dc" stroke-width="1.5" stroke-dasharray="7 5"/>
 <text x="60" y="1661" font-size="22" fill="#526982" font-weight="650" text-anchor="start">实现状态</text>
-<text x="200" y="1661" font-size="20" fill="#576d85" font-weight="400" text-anchor="start">当前已有 frame.messages 与 context.py 字符阈值压缩；完整 ContextManager 与 Hooks 尚待实现。</text>
+<text x="200" y="1661" font-size="20" fill="#576d85" font-weight="400" text-anchor="start">连续记录、预算压缩与可信 Hooks 已实现；完整来源追踪、资源生命周期和 Memory 待建。</text>
 <text x="60" y="1698" font-size="19" fill="#576d85" font-weight="400" text-anchor="start">图中六个组件是 Runtime 内部的职责划分，不要求拆成六个进程或独立服务。</text>
-<text x="40" y="1751" font-size="17" fill="#77889c" font-weight="400" text-anchor="start">Context Management v0.1 · AgentLoom · 与独立上下文管理设计文档配套</text>
+<text x="40" y="1751" font-size="17" fill="#77889c" font-weight="400" text-anchor="start">Context Management · 目标职责 · 2026-10-09 状态更新 · 当前实现见 runtime-design.md</text>
 </svg>

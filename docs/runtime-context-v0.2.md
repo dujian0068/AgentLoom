@@ -1,18 +1,20 @@
 # AgentLoom 上下文与会话记录实现 v0.2
 
+> **专题参考。** 当前跨模块架构与边界见[总体技术设计](technical-design.md)、[Runtime 详细设计](runtime-design.md)、[平台/API/数据](platform-api-data.md)和[部署运维](deployment-operations.md)，统一核对基线为 `9941e31`（2026-10-09）。本文保留专题契约和阶段验证。
+
 2026-10-07 · 当前代码说明；目标架构另见[上下文管理设计](context-management-design-v0.1.md)。
 
 本轮把消息管理从 Loop 抽到可注入的 ContextManager，保存连续的会话来源记录，并为新发布配置提供默认 80% 的主动压缩。模型页支持填写 Key 后获取可用模型，自动填入可识别的窗口参数。本页描述上下文实现；2026-10-08 已加入统一可信 Hooks，见[Hooks 使用说明](hooks-runtime-v0.1.md)。Memory、完整资源版本与多进程调度仍待建设。
 
 ## 1. 模块边界
 
-| 模块 | 当前职责 | 代码 |
-| ---- | -------- | ---- |
-| ContextManager | 创建、恢复实例上下文；追加原始记录与模型可见消息；排队补充；提交已验证的压缩视图及计数基线。 | [接口](../packages/runtime/agentloom_runtime/module_contracts.py)、[JournalContextManager](../packages/runtime/agentloom_runtime/context_manager.py) |
-| CompactionPolicy | 判断阈值，按完整交互组选择历史，分段生成交接摘要，验证减量和预算。 | [BudgetCompactionPolicy](../packages/runtime/agentloom_runtime/context.py) |
-| TokenEstimator | 估算完整 messages 和 tools 请求大小，可替换为供应商专用估算器。 | [budget.py](../packages/runtime/agentloom_runtime/budget.py) |
-| 会话历史服务 | 追加会话有序记录；在事务内同步检查点和可复用视图；为新 Run 投影历史。 | [session_history.py](../apps/api/agentloom/services/session_history.py) |
-| Loop / Engine | 驱动模型与工具循环，在行动调用前请求准备上下文；通过现有 save 回调提交执行进度。 | [engine.py](../packages/runtime/agentloom_runtime/engine.py) |
+| 模块             | 当前职责                                                                                     | 代码                                                                                                                                                 |
+| ---------------- | -------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ContextManager   | 创建、恢复实例上下文；追加原始记录与模型可见消息；排队补充；提交已验证的压缩视图及计数基线。 | [接口](../packages/runtime/agentloom_runtime/module_contracts.py)、[JournalContextManager](../packages/runtime/agentloom_runtime/context_manager.py) |
+| CompactionPolicy | 判断阈值，按完整交互组选择历史，分段生成交接摘要，验证减量和预算。                           | [BudgetCompactionPolicy](../packages/runtime/agentloom_runtime/context.py)                                                                           |
+| TokenEstimator   | 估算完整 messages 和 tools 请求大小，可替换为供应商专用估算器。                              | [budget.py](../packages/runtime/agentloom_runtime/budget.py)                                                                                         |
+| 会话历史服务     | 追加会话有序记录；在事务内同步检查点和可复用视图；为新 Run 投影历史。                        | [session_history.py](../apps/api/agentloom/services/session_history.py)                                                                              |
+| Loop / Engine    | 驱动模型与工具循环，在行动调用前请求准备上下文；通过现有 save 回调提交执行进度。             | [engine.py](../packages/runtime/agentloom_runtime/engine.py)                                                                                         |
 
 `create_engine(..., context_manager=...)` 可替换默认管理器；`compaction_policy=...` 可替换压缩算法。预算策略支持注入 `TokenEstimator`，估算器的 `module_id` 与声明配置进入检查点绑定。ContextManager 不导入 API、数据库或 MCP 客户端；数据库写入仍由应用服务适配。
 
@@ -20,11 +22,11 @@
 
 ## 2. 三类数据分开保存
 
-| 数据 | 保存什么 | 压缩时如何处理 |
-| ---- | -------- | -------------- |
-| 实例来源记录 `context.records` | 本 Run/实例实际接收的用户输入、补充、模型消息、工具结果和执行反馈；每条有局部 `seq`、`kind`、`message`。 | 追加保存，不用摘要覆盖。 |
-| 模型可见视图 `frame.messages` | 系统指令、继承历史、当前任务、摘要和近期交互。 | 允许替换为通过校验的压缩结果。 |
-| 执行状态 | 计划、pending 工具、调用边界、候选回答、子实例和终态。 | 继续由执行检查点保存，不从摘要推断工具成功或任务完成。 |
+| 数据                           | 保存什么                                                                                                 | 压缩时如何处理                                         |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| 实例来源记录 `context.records` | 本 Run/实例实际接收的用户输入、补充、模型消息、工具结果和执行反馈；每条有局部 `seq`、`kind`、`message`。 | 追加保存，不用摘要覆盖。                               |
+| 模型可见视图 `frame.messages`  | 系统指令、继承历史、当前任务、摘要和近期交互。                                                           | 允许替换为通过校验的压缩结果。                         |
+| 执行状态                       | 计划、pending 工具、调用边界、候选回答、子实例和终态。                                                   | 继续由执行检查点保存，不从摘要推断工具成功或任务完成。 |
 
 实例的局部 `seq` 与数据库中的会话 `seq` 不是同一编号。数据库 `session_messages` 以 `(session_id, seq)` 排序，以 `(run_id, instance, entry_key)` 去重；同一检查点重复保存不会重复插入来源。主实例和子实例均保存来源，`message` payload 经平台现有加密机制保存，序号、Run、实例、类型和时间等索引字段不加密。
 
@@ -119,12 +121,12 @@ POST /api/models/discover
 
 发现请求不保存新 Key；保存模型连接时才使用现有加密存储。编辑连接时允许留空 Key 并引用同空间资源；只有供应商和基础地址均未改变，才允许复用原密钥。HTTP 客户端不读取环境代理、不跟随重定向，限制响应大小，错误不会回显供应商响应正文或凭据。
 
-| 参数来源 | 行为 |
-| -------- | ---- |
-| 服务商响应 `provider` | 优先使用列表返回的有效 `context_window`、`max_output_tokens`。DeepSeek 当前列表接口提供这些字段。 |
+| 参数来源                     | 行为                                                                                                                                              |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 服务商响应 `provider`        | 优先使用列表返回的有效 `context_window`、`max_output_tokens`。DeepSeek 当前列表接口提供这些字段。                                                 |
 | 官方清单 `official_manifest` | OpenAI 官方 `/v1/models` 不返回窗口参数，平台对已核对的精确模型 ID 使用内置清单，保留来源链接和核对日期；不按名称前缀猜测，不自动套到自定义代理。 |
-| 平台回退 `platform_default` | 没有识别窗口参数时显示 32K 回退提示，管理员可在高级设置核对和覆盖。 |
-| 手动 `manual` | 管理员手动填写模型 ID 或覆盖预算，界面标识其来源。 |
+| 平台回退 `platform_default`  | 没有识别窗口参数时显示 32K 回退提示，管理员可在高级设置核对和覆盖。                                                                               |
+| 手动 `manual`                | 管理员手动填写模型 ID 或覆盖预算，界面标识其来源。                                                                                                |
 
 供应商的最大输出上限与本平台配置的 `max_output_tokens` 分开：配置初始通常为 4,096，自动选择时不会超过已知供应商上限。此配置同时作为输入预算预留和真实请求输出限制：OpenAI Chat Completions 使用 `max_completion_tokens`，DeepSeek 使用 `max_tokens`。
 

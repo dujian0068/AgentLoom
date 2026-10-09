@@ -1,5 +1,7 @@
 # Embedding Hooks 与知识库索引 v0.1
 
+> **专题参考。** 当前跨模块架构与边界见[总体技术设计](technical-design.md)、[Runtime 详细设计](runtime-design.md)、[平台/API/数据](platform-api-data.md)和[部署运维](deployment-operations.md)，统一核对基线为 `9941e31`（2026-10-09）。本文保留专题契约和阶段验证。
+
 更新：2026-10-09。本文说明已实现的可信 Python 扩展接口和知识库 API。通用契约见 [Hooks 运行时使用说明](hooks-runtime-v0.1.md)，完整目标见 [统一 Hooks 设计](hooks-design-v0.1.md)。
 
 Embedding Hooks 在文本转向量前后执行。文档入库和问题检索都经过同一个执行边界，复用 `HookManager` 的版本绑定、只读载荷、补丁校验、超时和恢复机制；不需要修改 Agent Loop。
@@ -20,26 +22,26 @@ flowchart LR
     A --> K[原文块关联向量 / 查询向量检索]
 ```
 
-| 模块 | 职责 |
-| --- | --- |
-| `packages/runtime/agentloom_runtime/embedding_hooks.py` | 提供独立执行边界，验证输入映射、响应索引与维度；真实结果先保存，after 只读。 |
-| `packages/runtime/agentloom_runtime/hooks/` | 复用扩展注册、匹配、执行管道和操作状态机；Embedding 有独立挂点 Schema。 |
-| `packages/runtime/agentloom_runtime/provider.py` | `embedding_response()` 返回向量、提供方索引及可选用量 / 请求 ID；旧 `embeddings()` 仍返回有序向量列表。 |
-| `apps/api/agentloom/services/embedding.py` | 冻结并校验知识库索引，解析当前凭据，加密保存操作检查点，隔离空间与操作身份。 |
-| `apps/api/agentloom/services/knowledge_imports.py` | 保存原始文件和每批操作 ID，全部批次完成后原子提交文档；原子建立新索引及全部导入任务。 |
-| `apps/api/agentloom/knowledge.py` | 原文分块与混合检索，按知识库固定的索引配置生成查询向量。 |
-| `apps/api/agentloom/services/knowledge_search.py` | 将 Agent 的工具调用检查点与各知识库向量化操作关联，同一次调用恢复时复用已完成批次。 |
-| `apps/api/agentloom/routes/knowledge.py` | 暴露创建、上传、恢复、检索及创建新索引版本的 API。 |
+| 模块                                                    | 职责                                                                                                    |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `packages/runtime/agentloom_runtime/embedding_hooks.py` | 提供独立执行边界，验证输入映射、响应索引与维度；真实结果先保存，after 只读。                            |
+| `packages/runtime/agentloom_runtime/hooks/`             | 复用扩展注册、匹配、执行管道和操作状态机；Embedding 有独立挂点 Schema。                                 |
+| `packages/runtime/agentloom_runtime/provider.py`        | `embedding_response()` 返回向量、提供方索引及可选用量 / 请求 ID；旧 `embeddings()` 仍返回有序向量列表。 |
+| `apps/api/agentloom/services/embedding.py`              | 冻结并校验知识库索引，解析当前凭据，加密保存操作检查点，隔离空间与操作身份。                            |
+| `apps/api/agentloom/services/knowledge_imports.py`      | 保存原始文件和每批操作 ID，全部批次完成后原子提交文档；原子建立新索引及全部导入任务。                   |
+| `apps/api/agentloom/knowledge.py`                       | 原文分块与混合检索，按知识库固定的索引配置生成查询向量。                                                |
+| `apps/api/agentloom/services/knowledge_search.py`       | 将 Agent 的工具调用检查点与各知识库向量化操作关联，同一次调用恢复时复用已完成批次。                     |
+| `apps/api/agentloom/routes/knowledge.py`                | 暴露创建、上传、恢复、检索及创建新索引版本的 API。                                                      |
 
 Agent 自身的 `hooks` 不能绑定 `model.embedding.*`。知识库可能被多个 Agent 共用，其向量处理配置由知识库持有，Agent 发布快照引用对应知识库和文档版本。
 
 ## 2. 挂点与只读上下文
 
-| 挂点 | 输入 | 允许行为 |
-| --- | --- | --- |
-| `model.embedding.before` | `texts=[{"index":0,"text":"..."}, ...]`、模型 ID、索引签名、请求维度、`encoding_format="float"`、purpose | `Continue`、`Reject` 或 `PatchInput({"texts": [...]})`；每条文本可修改，但不能增减条目、改变索引或交换索引位置。 |
-| `model.embedding.after` | 排好序的 `vectors`、`indices`、`dimension`，及可选 `usage`、`provider_request_id` | 首期只读，需要 `HookDefinition(observation=True)`，只能返回 `Continue`。 |
-| `operation.error` / `operation.finally` | 阶段、实际执行状态、已完成 Hook 数量和结构化错误类型 | 只读诊断，不改变真实执行结果。 |
+| 挂点                                    | 输入                                                                                                     | 允许行为                                                                                                         |
+| --------------------------------------- | -------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `model.embedding.before`                | `texts=[{"index":0,"text":"..."}, ...]`、模型 ID、索引签名、请求维度、`encoding_format="float"`、purpose | `Continue`、`Reject` 或 `PatchInput({"texts": [...]})`；每条文本可修改，但不能增减条目、改变索引或交换索引位置。 |
+| `model.embedding.after`                 | 排好序的 `vectors`、`indices`、`dimension`，及可选 `usage`、`provider_request_id`                        | 首期只读，需要 `HookDefinition(observation=True)`，只能返回 `Continue`。                                         |
+| `operation.error` / `operation.finally` | 阶段、实际执行状态、已完成 Hook 数量和结构化错误类型                                                     | 只读诊断，不改变真实执行结果。                                                                                   |
 
 所有载荷与 `ctx.config`、`ctx.scope` 深只读。使用 `ctx.kb_id`、`ctx.index_revision`、`ctx.index_signature`、`ctx.operation_id`、`ctx.purpose`、`ctx.space_id`、`ctx.actor_id` 获取宿主提供的作用域；没有运行任务时 `ctx.run_id` 为 `None`。模型 Key、数据库连接和实际执行回调不传给 Hook。
 
@@ -79,14 +81,16 @@ Content-Type: application/json
 {
   "name": "团队 Wiki",
   "embedding_id": "已有向量模型连接 ID",
-  "embedding_hooks": [{
-    "binding_id": "trim-text",
-    "hook_id": "trim-embedding-text",
-    "version": "v1",
-    "point": "model.embedding.before",
-    "purposes": ["document", "query"],
-    "config": {}
-  }]
+  "embedding_hooks": [
+    {
+      "binding_id": "trim-text",
+      "hook_id": "trim-embedding-text",
+      "version": "v1",
+      "point": "model.embedding.before",
+      "purposes": ["document", "query"],
+      "config": {}
+    }
+  ]
 }
 ```
 
@@ -118,12 +122,14 @@ Content-Type: application/json
 ```json
 {
   "name": "团队 Wiki · 新索引",
-  "embedding_hooks": [{
-    "binding_id": "trim-text",
-    "hook_id": "trim-embedding-text",
-    "version": "v2",
-    "point": "model.embedding.before"
-  }]
+  "embedding_hooks": [
+    {
+      "binding_id": "trim-text",
+      "hook_id": "trim-embedding-text",
+      "version": "v2",
+      "point": "model.embedding.before"
+    }
+  ]
 }
 ```
 
@@ -137,13 +143,13 @@ Content-Type: application/json
 
 文件导入先保存原文、分块和批次操作 ID，再执行每批最多 32 段文本的向量化。所有批次完成后才提交这个文件的文档与向量；中途失败保留加密导入记录。
 
-| API | 用途 |
-| --- | --- |
-| `POST /api/wiki/{id}/upload` | 原 multipart 文件上传；每个结果增加 `import_id`。失败结果包含可用的 `operation_id` 和 `retry_required`。 |
-| `GET /api/wiki/{id}/imports` | 查询有权限访问的导入状态元数据。 |
-| `POST /api/wiki/{id}/imports/{import_id}/resume` | 继续原导入及其批次，不重新创建文档；请求体默认 `{}`。 |
-| `GET /api/wiki/{id}/embedding-operations` | 查询操作状态、索引签名与是否需要明确重试，不返回文本、向量和凭据。 |
-| `POST /api/wiki/{id}/search` | 请求 `{"query":"问题"}`；需要恢复时带原 `embedding_operation_id`。 |
+| API                                              | 用途                                                                                                     |
+| ------------------------------------------------ | -------------------------------------------------------------------------------------------------------- |
+| `POST /api/wiki/{id}/upload`                     | 原 multipart 文件上传；每个结果增加 `import_id`。失败结果包含可用的 `operation_id` 和 `retry_required`。 |
+| `GET /api/wiki/{id}/imports`                     | 查询有权限访问的导入状态元数据。                                                                         |
+| `POST /api/wiki/{id}/imports/{import_id}/resume` | 继续原导入及其批次，不重新创建文档；请求体默认 `{}`。                                                    |
+| `GET /api/wiki/{id}/embedding-operations`        | 查询操作状态、索引签名与是否需要明确重试，不返回文本、向量和凭据。                                       |
+| `POST /api/wiki/{id}/search`                     | 请求 `{"query":"问题"}`；需要恢复时带原 `embedding_operation_id`。                                       |
 
 操作检查点独立保存 `original_input`、最终输入、`raw_output`、有效输出及 Hook 执行游标。真实响应先保存，之后才执行 after。after 的观察扩展失败后，用相同导入 ID / 操作 ID 恢复，会继续处理已保存响应，不会再次调用向量模型。
 

@@ -2,6 +2,8 @@
 
 # 统一 Hooks：模型、工具与用户扩展
 
+> **目标设计 / 阶段文档。** 2026-10-09 已按代码 `9941e31` 整理[总体技术设计](technical-design.md)和[Runtime 详细设计](runtime-design.md)。本文保留目标职责、拟议接口与演进背景；图中的隔离 Worker、完整来源追踪和 Memory 等不代表均已实现。当前 SDK 以[Hooks 使用说明](hooks-runtime-v0.1.md)为准。
+
 目标：用户可以读取授权范围内的模型与工具入参、出参，在明确阶段修改数据或阻止执行，并注册自己的扩展。Runtime 提供统一机制，ModelGateway、ToolRuntime 和其他能力模块提供类型明确的挂点。
 
 > **实现状态（2026-10-09）：** 可信 Python Hooks 的注册 / 绑定、阶段管道、字段校验、超时、取消与检查点恢复已实现，并接入模型、工具、上下文及运行 / 子任务边界。Embedding 也已接入，知识库固定文档 / 查询共用的处理链，提供索引重建与导入 / 查询恢复 API，见 [Embedding Hooks 与知识库索引](embedding-hooks-v0.1.md)。平台 API 支持绑定部署时注册的可信扩展，发布时冻结版本清单。实际 SDK 和已验证范围见[Hooks 运行时使用说明](hooks-runtime-v0.1.md)。本文仍保留完整目标设计；装饰器、Hook 包上传 / Git 导入、管理页面和隔离 Worker 尚未实现。EventBus.subscribe 仍只提供观察通知。

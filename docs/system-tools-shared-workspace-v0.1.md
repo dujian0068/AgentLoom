@@ -1,5 +1,7 @@
 # 系统工具、共享工作区与沙箱 v0.1
 
+> **专题参考。** 当前跨模块架构与边界见[总体技术设计](technical-design.md)、[Runtime 详细设计](runtime-design.md)、[平台/API/数据](platform-api-data.md)和[部署运维](deployment-operations.md)，统一核对基线为 `9941e31`（2026-10-09）。本文保留专题契约和阶段验证。
+
 实现说明与调研记录 · 2026-10-09。
 
 AgentLoom 的文件能力通过统一工具事件总线执行，并由独立工作区模块管理。新任务以空间、应用、会话为文件作用域；同一会话的后续提问可以继续使用之前生成的文件。部署共享存储时，选择 `shared_posix` 后端并将 NFS/NAS 挂载到每个工作节点。
@@ -12,20 +14,20 @@ Claude Code 的官方工具参考列出了 `Read`、`Write`、`Edit`、`Bash`、
 
 Codex 对比基于本地源码版本 `a933dd77dbe101d7bd746ea3c7d1f8174eca4a05`：该版本通过 Shell 使用 `rg`、`rg --files` 等命令搜索，通过 `exec_command` / `write_stdin` 执行或继续命令，并提供 `apply_patch`、`view_image`。这是一份特定版本的源码观察，不代表所有 Codex 产品形态的固定工具集。[Shell 契约](https://github.com/openai/codex/blob/a933dd77dbe101d7bd746ea3c7d1f8174eca4a05/codex-rs/core/src/tools/handlers/shell_spec.rs)、[Patch 契约](https://github.com/openai/codex/blob/a933dd77dbe101d7bd746ea3c7d1f8174eca4a05/codex-rs/core/src/tools/handlers/apply_patch_spec.rs)、[图片工具](https://github.com/openai/codex/blob/a933dd77dbe101d7bd746ea3c7d1f8174eca4a05/codex-rs/core/src/tools/handlers/view_image_spec.rs)
 
-| 能力 | Claude Code / Codex 的相关能力 | AgentLoom 本轮实现 |
-| --- | --- | --- |
-| 列目录、文件信息 | 文件搜索或 Shell | `workspace_list`、`workspace_stat` |
-| 按文件名搜索 | Glob 或 Shell 文件搜索 | `workspace_glob` |
-| 按内容搜索 | Grep 或 Shell `rg` | `workspace_grep`，路径、行号、匹配及截断信息 |
-| 读文本 | Read 或 Shell | `workspace_read`，按行范围读取并返回 SHA-256 |
-| 写文件 | Write、Patch 或 Shell | `workspace_write`，原子替换及可选版本条件 |
-| 局部编辑 | Edit / `apply_patch` | `workspace_edit`，精确文本替换，拒绝不明确的多处匹配 |
-| 新建目录、删除文件 | Shell / Patch | `workspace_mkdir`、`workspace_delete`；不递归删除目录 |
-| 执行命令 | Bash / `exec_command` | `workspace_command`，一次性 Docker 沙箱；不要求绑定 Skill |
-| 持续进程、终端交互 | 后台任务 / `write_stdin` | 尚未实现，需要进程会话、归属节点、输出游标及终止协议 |
-| 图片、Notebook、语义代码查询 | 多模态读取、Notebook、LSP 等 | 尚未实现专用系统工具 |
-| 原生多文件 Patch | `apply_patch` | 尚未实现原生 Patch 格式；当前精确编辑覆盖常规文本修改 |
-| 网络搜索、网页读取 | 相应网络工具 | 沿用可绑定的外部 MCP；本轮不扩大沙箱网络权限 |
+| 能力                         | Claude Code / Codex 的相关能力 | AgentLoom 本轮实现                                        |
+| ---------------------------- | ------------------------------ | --------------------------------------------------------- |
+| 列目录、文件信息             | 文件搜索或 Shell               | `workspace_list`、`workspace_stat`                        |
+| 按文件名搜索                 | Glob 或 Shell 文件搜索         | `workspace_glob`                                          |
+| 按内容搜索                   | Grep 或 Shell `rg`             | `workspace_grep`，路径、行号、匹配及截断信息              |
+| 读文本                       | Read 或 Shell                  | `workspace_read`，按行范围读取并返回 SHA-256              |
+| 写文件                       | Write、Patch 或 Shell          | `workspace_write`，原子替换及可选版本条件                 |
+| 局部编辑                     | Edit / `apply_patch`           | `workspace_edit`，精确文本替换，拒绝不明确的多处匹配      |
+| 新建目录、删除文件           | Shell / Patch                  | `workspace_mkdir`、`workspace_delete`；不递归删除目录     |
+| 执行命令                     | Bash / `exec_command`          | `workspace_command`，一次性 Docker 沙箱；不要求绑定 Skill |
+| 持续进程、终端交互           | 后台任务 / `write_stdin`       | 尚未实现，需要进程会话、归属节点、输出游标及终止协议      |
+| 图片、Notebook、语义代码查询 | 多模态读取、Notebook、LSP 等   | 尚未实现专用系统工具                                      |
+| 原生多文件 Patch             | `apply_patch`                  | 尚未实现原生 Patch 格式；当前精确编辑覆盖常规文本修改     |
+| 网络搜索、网页读取           | 相应网络工具                   | 沿用可绑定的外部 MCP；本轮不扩大沙箱网络权限              |
 
 Skill 加载、MCP 调用、知识检索、计划维护与子 Agent 委派已有独立处理器。本轮补充基础文件与命令能力，没有把这些能力塞进 Loop。
 
@@ -44,27 +46,27 @@ Loop
 
 写操作是一条有唯一执行者的请求/响应消息。`request.started/completed/failed` 等通知可以交给多个观察者；观察者不能重复执行写入，也不能替代请求结果。这沿用[运行时事件总线](runtime-event-bus.md)的单处理器契约。
 
-| 模块 | 责任 |
-| --- | --- |
-| `engine.py` | 保存通用调用进度、发送请求、接收结果；不判断具体文件操作 |
-| `tool_runtime.py` | 注册、校验、授权、工具 Hooks 和未知结果恢复边界 |
-| `handlers/filesystem.py` | 模型可见工具定义及参数到存储方法的适配 |
-| `workspace.py` | `WorkspaceStorage` 接口、`WorkspaceProvider` 和异步调用适配 |
-| `workspace_store.py` | 有界读写、遍历、正则搜索、原子替换、版本条件、共享锁 |
-| `sandbox.py` | 命令进程隔离、单作用域挂载、资源限制和清理 |
-| API `services/workspaces.py` | 从已鉴权的运行记录解析作用域，固定存储卷，列出和下载产物 |
-| `run_workspaces` | 保存每个新运行的逻辑存储绑定；由编号迁移 `005` 建立 |
+| 模块                         | 责任                                                        |
+| ---------------------------- | ----------------------------------------------------------- |
+| `engine.py`                  | 保存通用调用进度、发送请求、接收结果；不判断具体文件操作    |
+| `tool_runtime.py`            | 注册、校验、授权、工具 Hooks 和未知结果恢复边界             |
+| `handlers/filesystem.py`     | 模型可见工具定义及参数到存储方法的适配                      |
+| `workspace.py`               | `WorkspaceStorage` 接口、`WorkspaceProvider` 和异步调用适配 |
+| `workspace_store.py`         | 有界读写、遍历、正则搜索、原子替换、版本条件、共享锁        |
+| `sandbox.py`                 | 命令进程隔离、单作用域挂载、资源限制和清理                  |
+| API `services/workspaces.py` | 从已鉴权的运行记录解析作用域，固定存储卷，列出和下载产物    |
+| `run_workspaces`             | 保存每个新运行的逻辑存储绑定；由编号迁移 `005` 建立         |
 
 替换存储实现通过 `WorkspaceProvider(..., store_factory=...)` 注入，不需要修改 Loop。文件工具仍经过已有的 `tool.before` / `tool.after` Hooks；Hook 不能替换宿主提供的空间、应用、会话或根目录。
 
 ## 3. 为什么选择共享 POSIX 文件系统
 
-| 方案 | 对当前需求的适配 | 本轮选择 |
-| --- | --- | --- |
-| NFSv4.1 / 托管 NAS | 多节点挂载同一文件树，适配现有读写、目录、原子替换与 Shell 工作目录 | 首选；由部署环境提供挂载 |
-| CephFS | 提供 POSIX 文件系统及独立元数据服务；适合已经维护 Ceph 的团队 | 可作为同一适配器的挂载来源，不为测试阶段新建 Ceph 集群 |
+| 方案                 | 对当前需求的适配                                                            | 本轮选择                                                     |
+| -------------------- | --------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| NFSv4.1 / 托管 NAS   | 多节点挂载同一文件树，适配现有读写、目录、原子替换与 Shell 工作目录         | 首选；由部署环境提供挂载                                     |
+| CephFS               | 提供 POSIX 文件系统及独立元数据服务；适合已经维护 Ceph 的团队               | 可作为同一适配器的挂载来源，不为测试阶段新建 Ceph 集群       |
 | S3 / S3 兼容对象存储 | 对象与版本管理适合交付产物、备份、归档；不是本接口直接调用的 POSIX 文件目录 | 后续可添加 ArtifactStore；本轮不经 FUSE 把对象存储当工作目录 |
-| 节点本地目录 | 测试方便，但其他节点看不到同一文件 | 默认开发后端，不能当成共享部署 |
+| 节点本地目录         | 测试方便，但其他节点看不到同一文件                                          | 默认开发后端，不能当成共享部署                               |
 
 这是根据当前文件操作与命令执行需求做出的选型。[CephFS 官方说明](https://docs.ceph.com/en/latest/cephfs/)将其定义为 POSIX 文件系统；[S3 官方说明](https://docs.aws.amazon.com/AmazonS3/latest/userguide/Welcome.html)说明对象、存储桶与版本管理语义。对象存储适配属于后续模块，不宣称它和 POSIX 的文件锁、目录及修改语义等价。
 

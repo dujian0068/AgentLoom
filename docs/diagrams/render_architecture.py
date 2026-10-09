@@ -6,7 +6,7 @@ OUT = Path(__file__).parent
 W, H = 1580, 2046
 parts = [f'''<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}" role="img" aria-labelledby="title description">
 <title id="title">AgentLoom 抽象模块架构图</title>
-<desc id="description">以 Agent Runtime 为核心的目标模块架构：内核包含 Loop、模型网关、上下文、计划、子任务、完成检查、恢复与统一 HookManager。Hooks 包含挂点契约、扩展注册、有序管道和执行器；模型与工具边界共用 Hooks，用户扩展由隔离 Worker 执行。管理控制面发布配置与扩展绑定；事件总线负责请求和结果，SSE 负责观测。完整 Hooks 尚待实现。</desc>
+<desc id="description">以 Agent Runtime 为核心的目标模块架构：内核包含 Loop、模型网关、上下文、计划、子任务、完成检查、恢复与统一 HookManager。Hooks 包含挂点契约、扩展注册、有序管道和执行器；模型与工具边界共用 Hooks，用户扩展由隔离 Worker 执行。管理控制面发布配置与扩展绑定；事件总线负责请求和结果，SSE 负责观测。可信 Hooks 已实现；扩展管理和隔离 Worker 仍待实现，图中为目标职责。</desc>
 <defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto-start-reverse"><path d="M0 0 L7 4 L0 8" fill="none" stroke="#8696aa" stroke-width="1.5"/></marker></defs>
 <style>text{{font-family:"PingFang SC","Hiragino Sans GB","Noto Sans CJK SC",sans-serif}}.title{{font-weight:650;fill:#20344b}}.body{{fill:#576d85}}.small{{fill:#667b91}}</style>
 <rect width="{W}" height="{H}" fill="#fff"/>
@@ -97,14 +97,14 @@ card(400, 678, 552, 82, '检查点与恢复', '对话 / 计划 / 工具边界 / 
 card(968, 678, 552, 82, '执行策略', '调用预算 / 超时 / 取消 / 委派限额', color='#405aa2', subsize=18)
 rect(400, 784, 1120, 313, '#fff7e3', '#c89943', 12, sw=1.8)
 text(420, 819, 'HookManager · 生命周期扩展', 26, '#8a601e', 650, css='')
-text(1498, 818, 'Runtime 正式扩展接口 · 待实现', 18, '#8a601e', anchor='end', css='')
+text(1498, 818, '可信 Python 已实现 · Worker 待建', 18, '#8a601e', anchor='end', css='')
 for x, label in [(420, '模型调用前后'), (696, '工具执行前后'), (972, '上下文与压缩'), (1248, '任务与子任务')]:
     text(x, 856, label, 21, '#826427', 600, css='')
-for x, title, subtitle in [(420, '挂点契约', 'HookPointRegistry'), (692, '扩展注册与绑定', 'HookRegistry'), (964, '有序处理管道', 'HookPipeline'), (1236, '扩展执行器', 'HookExecutor')]:
+for x, title, subtitle in [(420, '挂点契约', 'HookPointRegistry'), (692, '扩展注册与绑定', 'HookRegistry'), (964, '有序处理管道', 'Manager 内部管道'), (1236, '扩展执行器', 'HookExecutor')]:
     card(x, 879, 254, 83, title, subtitle, color='#8a601e', size=21, subsize=18)
-text(420, 993, '执行：HookManager → HookPipeline → HookExecutor；注册表提供契约与版本绑定。', 19)
+text(420, 993, '执行：HookManager 的有序管道 → HookExecutor；注册表提供契约与版本绑定。', 19)
 text(420, 1027, '入参 → before → 授权与校验 → 实际调用 → 保存真实结果 → after → 有效输出', 19)
-text(420, 1070, '内置 Python / 用户隔离 Worker；按阶段放行、修改或拦截，真实执行事实独立保存。', 19)
+text(420, 1070, '可信 Python 已实现 / 隔离 Worker 待建；按阶段修改或拦截，真实执行事实独立保存。', 19)
 text(400, 1126, '模型网关与工具分发器共用 HookManager；阶段、版本与进度进入检查点，支持恢复。', 18)
 line(888, 1154, 888, 1184)
 line(1012, 1184, 1012, 1154)
@@ -138,7 +138,7 @@ text(60, 1973, 'Hooks 参与节点处理；EventBus 传递请求和结果。', 2
 rect(797, 1906, 743, 90, '#eef7fb', '#bdd7e5')
 text(817, 1939, '观测通道', 21, '#376e91', 650, css='')
 text(817, 1973, '运行记录 → 事件存储 → SSE → 页面 / 观察者', 21)
-text(40, 2034, '目标架构 · 2026-10-02 更新：统一 Hooks、SDK 与隔离 Worker 尚待实现，详细契约见设计文档。', 18)
+text(40, 2034, '目标架构 · 2026-10-09：可信 Hooks 与 Python SDK 已实现；扩展管理与隔离 Worker 待建。', 18)
 parts.append('</svg>')
 svg = '\n'.join(parts)
 (OUT / 'abstract-module-architecture.svg').write_text(svg, encoding='utf-8')

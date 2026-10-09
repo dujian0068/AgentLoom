@@ -1,5 +1,7 @@
 # 织点 AgentLoom · 运行时事件总线
 
+> **专题参考。** 当前跨模块架构与边界见[总体技术设计](technical-design.md)、[Runtime 详细设计](runtime-design.md)、[平台/API/数据](platform-api-data.md)和[部署运维](deployment-operations.md)，统一核对基线为 `9941e31`（2026-10-09）。本文保留专题契约和阶段验证。
+
 实现说明 · 2026-10-07。模型与策略注入、检查点版本和完整示例见 [Runtime 模块化实现 v0.1](runtime-modularity-v0.1.md)。
 
 ## 执行路径
@@ -16,7 +18,7 @@
 
 | 文件或目录          | 职责                                                                   |
 | ------------------- | ---------------------------------------------------------------------- |
-| `engine.py`         | 模型循环、调用注入的压缩/完成策略、通用调用进度、结果反馈。                   |
+| `engine.py`         | 模型循环、调用注入的压缩/完成策略、通用调用进度、结果反馈。            |
 | `event_bus.py`      | 异步 request/reply、唯一关联 ID、通知订阅、取消和超时清理。            |
 | `tool_contracts.py` | 请求、结果、工具定义与可信执行上下文。                                 |
 | `tool_runtime.py`   | 工具注册表、模型可见定义、绑定权限、JSON Schema 校验、恢复与执行策略。 |
@@ -27,7 +29,7 @@
 - 请求 `Event` 包含 `topic`、`correlation_id`、`payload` 和进程内可信 `context`；执行上下文只给请求处理器。
 - 平台构造的 ToolContext 提供深只读 config、实例/工作区，以及 plan、children、citations、invocation 受限接口；不直接暴露 frame/state。模型只能提供工具参数，不能替换上下文。
 - `execution_services.py` 把受限接口适配到 format=1 检查点，宿主仍持有运行状态和子任务执行回调；这不是可直接跨进程传输的对象。
-- `ToolOutcome` 包含 `value`、`status` 和证据参数。
+- `ToolOutcome` 包含 `value`、`status`、`evidence_arguments`、`raw_value` 和 `has_raw_value`。`value` 是有效观察，后两项保留真实工具结果及其存在标记；后置 Hook 不会改写已发生的执行事实。
 
 ## 注册与扩展
 
