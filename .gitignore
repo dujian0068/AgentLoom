@@ -15,3 +15,7 @@ apps/web/dist/
 .ruff_cache/
 .idea/
 .openai/
+
+# Generated documentation site
+docs/.vitepress/cache/
+docs/.vitepress/dist/

@@ -1,5 +1,7 @@
 # AgentLoom 文档
 
+推荐使用带目录和搜索的网页阅读：在项目根执行 `npm ci`、`npm run docs:dev`，打开 http://127.0.0.1:8767 。[站内首页](index.md) · [阅读指南](reading-guide.md) · [维护与部署](documentation-site.md)。
+
 更新：2026-10-09；当前实现以 `master` 的 `9941e31` 为核对基线。建议从总体技术设计进入，再按 Runtime、平台接口或部署方向阅读。
 
 ## 当前完整技术文档
@@ -67,7 +69,7 @@
 ## 维护规则
 
 - 新需求更新产品需求；实现变化同时更新对应技术设计、接口和状态矩阵。
-- 使用 Markdown；图片用 SVG 并直接嵌入，不再生成同内容 HTML/TXT/PNG/JPG。
+- 正文只维护 Markdown，图片用 SVG 并直接嵌入。网页由 VitePress 自动构建，HTML 产物不提交；不再手工维护同内容 HTML/TXT/PNG/JPG。
 - 链接使用仓库相对路径；修改图时同步 SVG 与生成脚本；保留已有显式章节锚点。
 - 测试记录注明代码基线、环境、时间与未验证项；历史数字不能冒充当前复验结果。
 - API 导出契约位于 [openapi.json](../packages/contracts/openapi.json)，变更路由时同步校验。

@@ -92,6 +92,10 @@ agent-loom/
 
 执行请求和观测通知分离。Hooks 可以在允许阶段修改数据，Observer 只观察。最终授权、参数校验和真实结果保存必须在执行路径中完成。
 
+## 文档站
+
+`docs/*.md` 是正文；`docs/.vitepress/config.mts` 管理目录、链接转换和中文搜索，`theme/` 管理网页样式和 Mermaid SVG 渲染。根目录 npm 脚本提供独立的 `docs:dev/build/preview/check`，不启动平台或数据库。构建产物与缓存不提交；详见[文档站说明](documentation-site.md)。
+
 ## 5. 部署与数据位置
 
 [deploy](../deploy) 包含单进程启动、检查脚本、Dockerfile/Compose、数据库只读检查与工作区探测。当前容器配置不等于分布式执行部署。
