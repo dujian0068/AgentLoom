@@ -4,12 +4,13 @@ from pathlib import Path
 
 from .. import sandbox
 from ..tool_contracts import ToolDefinition, bindings, parameters
-from .workspace import prepare_workspace, safe_file
+from ..workspace import storage_call
+from ..workspace_store import PosixWorkspaceStore
 
 S = {"type": "string"}
 
 
-def register(registry, snapshot, *, decrypt, search):
+def register(registry, snapshot, *, decrypt, search, include_command=True):
     def available(config, instance):
         return bool(bindings(snapshot, config, "skills"))
 
@@ -33,13 +34,15 @@ def register(registry, snapshot, *, decrypt, search):
 
     async def read(context, args):
         skill = bound_skill(context, args)
-        result = safe_file(Path(skill["path"]), args["path"]).read_text()[:20000]
+        result = await storage_call(
+            PosixWorkspaceStore(Path(skill["path"])).read, args["path"], limit=1000
+        )
         context.emit("skill.loaded", {"instance": context.instance, "name": skill["name"]})
-        return result
+        return result["content"]
 
     async def command(context, args):
         return await sandbox.command(
-            prepare_workspace(context),
+            PosixWorkspaceStore(context.workspace),
             bindings(snapshot, context.config, "skills"),
             args["command"],
         )
@@ -62,6 +65,8 @@ def register(registry, snapshot, *, decrypt, search):
             available=available,
         )
     )
+    if not include_command:
+        return
     registry.register(
         ToolDefinition(
             name="workspace_command",

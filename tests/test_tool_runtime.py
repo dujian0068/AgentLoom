@@ -17,6 +17,7 @@ from agentloom_runtime.tool_contracts import (
     parameters,
 )
 from agentloom_runtime.tool_runtime import ToolRegistry, ToolRuntime
+from agentloom_runtime.workspace import WorkspaceProvider
 from test_harness import answer, call, decision, runner, snapshot
 
 
@@ -233,7 +234,9 @@ def test_child_cannot_use_main_resources_or_escape_its_workspace(tmp_path, monke
     asyncio.run(run())
     assert mcp_calls == [("main-mcp", "lookup", "test-secret")]
     assert (tmp_path / "shared.txt").read_text() == "main-only"
-    assert (tmp_path / "subagents/sub-1/shared.txt").read_text() == "child-only"
+    child_workspace = WorkspaceProvider.standalone(tmp_path).for_instance("sub-1")
+    assert child_workspace.read("shared.txt")["content"] == "child-only"
+    assert not (tmp_path / "subagents").exists()
     failed = [event for event in events if event["kind"] == "tool.failed"]
     assert [event["name"] for event in failed] == [
         "skill_load",
@@ -359,6 +362,17 @@ def test_legacy_main_pending_resumes_ready_tool_once(tmp_path, monkeypatch):
         "candidate": None,
     }
     checkpoint = copy.deepcopy(runtime.state)
+    # A historical checkpoint carries the historical catalog, not today's new
+    # file-tool schemas and output metadata.
+    from agentloom_runtime.handlers import register_builtins
+
+    legacy_registry = ToolRegistry()
+    with legacy_registry.implementation_namespace("builtin-tools/v1"):
+        register_builtins(
+            legacy_registry, snapshot(), decrypt=lambda value: value, search=no_search
+        )
+    checkpoint.pop("workspace_binding")
+    checkpoint["modules"]["tools"] = legacy_registry.bindings()
 
     async def fake_model(model, messages, tools, secret):
         if tools:
@@ -444,7 +458,10 @@ def test_legacy_child_pending_restores_same_child_and_private_handler_state(tmp_
     assert resumed.state["delegations"] == 1
     assert set(resumed.state["frames"]) == {"main", "sub-1"}
     assert set(seen_models) == {"inherited-model"}
-    assert (tmp_path / "subagents/sub-1/resumed.txt").read_text() == "same child"
+    assert (
+        WorkspaceProvider.standalone(tmp_path).for_instance("sub-1").read("resumed.txt")["content"]
+        == "same child"
+    )
     assert not any(event["kind"] == "subagent.created" for event in events)
     migrated = [
         state["frames"]["main"]["pending"]

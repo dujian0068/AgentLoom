@@ -23,6 +23,7 @@
 | [Embedding Hooks 与知识库索引](embedding-hooks-v0.1.md) | 文档 / 查询预处理、索引签名、原文保留、重建版本及导入 / 查询恢复 API |
 | [上下文管理](context-management-design-v0.1.md) | 来源记录、模型可见视图、Token 预算、摘要、资源激活、实例隔离与 Hooks 协作 |
 | [运行时事件总线](runtime-event-bus.md)          | 工具请求与响应、注册表、处理器、取消、超时和检查点                        |
+| [系统工具、共享工作区与沙箱](system-tools-shared-workspace-v0.1.md) | Claude Code / Codex 对比、系统工具、NFS 选型、应用与会话隔离、部署及恢复 |
 
 ## 开发与部署
 

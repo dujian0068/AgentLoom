@@ -16,6 +16,7 @@
 | [Hooks 使用说明 v0.1](docs/hooks-runtime-v0.1.md)             | 已实现挂点、Python SDK、发布绑定与失败恢复       |
 | [上下文管理设计 v0.1](docs/context-management-design-v0.1.md) | 上下文装配、预算、压缩、Skill/RAG 与主子任务隔离 |
 | [运行时事件总线](docs/runtime-event-bus.md)                   | 工具请求与结果契约、注册、取消和恢复             |
+| [系统工具与共享工作区](docs/system-tools-shared-workspace-v0.1.md) | 文件工具、NFS/NAS 选型、会话隔离和沙箱部署 |
 | [目录职责规划](docs/directory-plan.md)                        | 目录边界、依赖方向与后续模块拆分                 |
 
 ## 本地启动
@@ -70,6 +71,7 @@ PostgreSQL 关键词检索使用 GIN 全文索引，支持中文二元词及 SQL
 - 模型连接：DeepSeek / OpenAI 的 Chat Completions 工具调用接口；可配置模型 ID 与连接测试。模型必须实际支持该接口和工具调用。
 - Skill：完整目录上传、公开 HTTPS Git 导入、frontmatter 校验、附件读取、按需加载。
 - 工具：外部 MCP Streamable HTTP / SSE，工具发现与测试；Python 托管包上传/Git、Docker 构建、stdio MCP 调用。
+- 系统工具：目录/文件信息、Glob、Grep、按行读取、原子写入、精确编辑、目录创建、文件删除和沙箱命令；经工具事件总线调用可替换工作区存储。
 - 知识库：MD/TXT/SQL 上传、分块、文件引用、关键词 + 向量融合检索；独立 Embedding Hooks、固定索引版本、文件导入恢复和新索引重建。
 - Agent：主 Agent 的 ReAct/自动 Plan，内嵌子 Agent 配置；子 Agent 不选模型或执行模式，动态处理委派任务。
 - 发布：不可变配置版本；草稿不允许运行。网页和 API 同一引擎，支持会话、SSE 事件、取消、超时、产物下载。
@@ -111,7 +113,9 @@ SQLite 与 PostgreSQL 使用各自的编号 SQL 迁移，通过 `schema_migratio
 
 模型未配置真实 Key 时，不提供假模型回答。测试中使用替身模型验证执行逻辑；实际供应商调用需要配置后验证。
 
-Skill 脚本与托管工具需要可用 Docker 引擎。本机未安装 Docker，因此容器构建与脚本执行未做实机验证。不会在宿主机执行上传脚本。上传内容仍会保存，页面显示缺少环境；Docker 就绪后可以构建。脚本默认使用 `python:3.12-slim`，无网络，只挂载该任务工作区与绑定技能。依赖额外软件的 Skill 需要后续定制镜像。托管工具入口是 `tool.py`，可附 `requirements.txt`，运行时默认无网络。
+系统命令、Skill 脚本与托管工具需要可用 Docker 引擎。本机未安装 Docker，因此容器构建与脚本执行未做实机验证。不会在宿主机执行上传脚本。系统命令不要求绑定 Skill，默认使用预先准备的 `python:3.12-slim`，无网络，仅挂载当前会话/子任务工作区与只读绑定技能。可通过 `AGENT_LOOM_SANDBOX_IMAGE` 指定可信定制镜像，或通过 `AGENT_LOOM_SANDBOX_RUNTIME` 选择已安装的 `runsc`。平台与沙箱需使用匹配的非 root UID/GID。托管工具入口是 `tool.py`，可附 `requirements.txt`，运行时默认无网络。
+
+工作区默认使用本地 `data/workspaces/`。共享部署配置 `AGENT_LOOM_WORKSPACE_BACKEND=shared_posix`、绝对挂载路径和固定卷标识，应用验证预先创建的 `.agentloom-volume`；挂载不匹配时停止，不回落本地目录。主工作区按空间/应用/会话隔离，同会话的后续提问可以继续读写文件；子 Agent 按运行和实例隔离。运行状态、事件与文件只允许发起用户访问，Agent 配置与发布资源继续在团队空间共享。配置、共享存储选型和限制见[系统工具与共享工作区](docs/system-tools-shared-workspace-v0.1.md)。
 
 Docker Compose 仅运行平台服务，**默认不挂载宿主 Docker socket**。如需托管工具/脚本，当前推荐在有 Docker 的宿主机原生启动后端；后续拆分独立执行服务。Compose 镜像本次未实机构建。
 
@@ -121,7 +125,7 @@ Git 导入首版仅支持公开 HTTPS 仓库，不支持私有凭据。每次 Sk
 
 发布记录固定文档 ID 集合；新上传文件须重新发布后加入。删除文档后历史运行也不能再检索它；文件删除采用逻辑删除。现阶段在 SQLite 或 PostgreSQL 的文本字段中保存向量，并由 Python 在小规模数据上计算相似度，后续可替换向量库。
 
-第一版是单进程单机版本；每空间最多并行 4 个运行，每次执行 10 分钟超时，模型调用上限 96 次、每实例最多 64 次行动、最多 8 个委派任务；压缩和完成检查计入模型调用预算。恢复任务会重置本次执行预算，累计调用仍记录。子任务顺序执行，无递归创建；暂未实现分布式队列或完整 Skill 宿主工具兼容。
+当前运行调度仍为单进程；每空间最多并行 4 个运行，每次执行 10 分钟超时，模型调用上限 96 次、每实例最多 64 次行动、最多 8 个委派任务；压缩和完成检查计入模型调用预算。恢复任务会重置本次执行预算，累计调用仍记录。子任务顺序执行，无递归创建；共享工作区适配不代替分布式队列和 Worker 租约，暂未实现完整 Skill 宿主工具兼容。
 
 网页使用 cookie 会话，API 使用有效期 90 天的空间 Key。服务器通过 HTTPS 反向代理部署时设置 `AGENT_LOOM_SECURE_COOKIE=1`；同源校验用请求 Host 和 Origin，需要代理保留正确 Host。
 
@@ -145,7 +149,7 @@ data/                            运行数据（Git 忽略）
 work/                            临时验证数据（Git 忽略）
 ```
 
-SQLite 模式备份需包含 `data/agentloom.db`；PostgreSQL 模式需单独备份远程数据库。两种模式都必须备份本机的 `data/encryption.key`、`data/assets/`、`data/runs/`，数据库不会代替这些文件的存储。加密密钥文件权限为 0600；丢失后无法解密已保存的供应商 Key 和任务检查点。数据库与文件应保留对应的同一批次备份。
+SQLite 模式备份需包含 `data/agentloom.db`；PostgreSQL 模式需单独备份远程数据库。两种模式都必须备份本机的 `data/encryption.key`、`data/assets/`、旧 `data/runs/`，以及当前工作区根目录（默认 `data/workspaces/`，共享模式为配置的共享卷）。数据库不会代替这些文件的存储。加密密钥文件权限为 0600；丢失后无法解密已保存的供应商 Key 和任务检查点。数据库中的工作区绑定、检查点与文件应保留对应的同一批次备份。
 
 ## 工具开发
 

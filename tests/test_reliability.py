@@ -250,7 +250,7 @@ def test_legacy_database_migrates_without_data_loss(tmp_path, monkeypatch):
         )
     db.init()
     before = db.query("SELECT * FROM schema_migrations ORDER BY version")
-    assert [row["version"] for row in before] == [1, 2, 3, 4]
+    assert [row["version"] for row in before] == [1, 2, 3, 4, 5]
     assert db.query("SELECT name FROM users WHERE id=?", ("legacy",), True)["name"] == "旧账号"
     db.init()
     assert db.query("SELECT * FROM schema_migrations ORDER BY version") == before

@@ -3,17 +3,17 @@
 import asyncio
 import json
 import time
+from urllib.parse import quote
 
 from agentloom_runtime.context_manager import queue_instruction
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 
 from agentloom import store as db
-from agentloom.assets import safe_path
 from agentloom.dependencies import auth
 from agentloom.schema import ResumeInput, RunInput
 from agentloom.security import decrypt, encrypt
-from agentloom.services import embedding, session_history
+from agentloom.services import embedding, session_history, workspaces
 from agentloom.services.agents import get_agent
 from agentloom.services.runs import (
     events_stream,
@@ -87,6 +87,7 @@ async def run_agent(aid: str, payload: RunInput, user=Depends(auth)):
                 time.time(),
             ),
         )
+        workspaces.pin_run(c, rid)
         db._insert_event(
             c, rid, "run.created", {"run_id": rid, "session_id": sid, "version": version}
         )
@@ -127,16 +128,7 @@ def run_state(rid: str, user=Depends(auth)):
         {"seq": x["seq"], "kind": x["kind"], **json.loads(x["payload"])}
         for x in db.query("SELECT * FROM events WHERE run_id=? ORDER BY seq", (rid,))
     ]
-    workspace = db.DATA / "runs" / rid
-    row["artifacts"] = (
-        [
-            str(p.relative_to(workspace))
-            for p in workspace.rglob("*")
-            if p.is_file() and not p.is_symlink()
-        ]
-        if workspace.exists()
-        else []
-    )
+    row["artifacts"] = workspaces.list_artifacts(row) if row["user_id"] == user["user_id"] else []
     return row
 
 
@@ -185,6 +177,7 @@ async def resume_run(rid: str, payload: ResumeInput, user=Depends(auth)):
     await asyncio.to_thread(flush_finalizations, rid)
     if row["user_id"] != user["user_id"]:
         raise HTTPException(403, "只能恢复自己的任务")
+    workspaces.resolve_run(row)
     version = db.query(
         "SELECT snapshot FROM versions WHERE agent_id=? AND version=?",
         (row["agent_id"], row["version"]),
@@ -276,11 +269,19 @@ async def resume_run(rid: str, payload: ResumeInput, user=Depends(auth)):
 
 @router.get("/api/v1/runs/{rid}/artifact")
 def artifact(rid: str, path: str, user=Depends(auth)):
-    get_run(rid, user)
-    p = safe_path(db.DATA / "runs" / rid, path)
-    if not p.is_file():
-        raise HTTPException(404)
-    return FileResponse(p, filename=p.name, media_type="application/octet-stream")
+    row = get_run(rid, user)
+    if row["user_id"] != user["user_id"]:
+        raise HTTPException(403, "只能读取自己会话中的文件")
+    try:
+        content = workspaces.read_artifact(row, path)
+    except FileNotFoundError:
+        raise HTTPException(404, "文件不存在") from None
+    filename = path.rsplit("/", 1)[-1]
+    return Response(
+        content,
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": "attachment; filename*=UTF-8''" + quote(filename, safe="")},
+    )
 
 
 @router.get("/api/v1/sessions/{sid}/messages")

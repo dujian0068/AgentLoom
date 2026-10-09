@@ -15,6 +15,7 @@ from agentloom.security import decrypt
 from agentloom.services.hooks import hook_manager
 from agentloom.services.knowledge_search import run_knowledge_search
 from agentloom.services.session_history import save_checkpoint
+from agentloom.services.workspaces import resolve_run
 from agentloom.state import PENDING_FINALIZATIONS, TASKS
 
 _CONNECTION_ERRORS = (psycopg.OperationalError, psycopg.InterfaceError, PoolTimeout)
@@ -95,7 +96,7 @@ async def execute_run(
         db.event(rid, kind, redact(payload))
 
     try:
-        row = db.query("SELECT input,status,user_id,version FROM runs WHERE id=?", (rid,), True)
+        row = db.query("SELECT * FROM runs WHERE id=?", (rid,), True)
         if not row or row["status"] == "cancelled":
             return
         hooks = hook_manager(snap["config"], snap.get("hook_manifest"))
@@ -105,8 +106,7 @@ async def execute_run(
         secrets_in_use.append(decrypt(snap["model_obj"]["secret"]))
         for tool in snap["tools"]:
             secrets_in_use.append(decrypt(tool.get("secret", "")))
-        workspace = db.DATA / "runs" / rid
-        workspace.mkdir(parents=True, exist_ok=True)
+        workspace_provider, workspace = resolve_run(row)
         db.transition(
             rid,
             "running",
@@ -133,6 +133,7 @@ async def execute_run(
                 checkpoint=checkpoint,
                 save=save,
                 hooks=hooks,
+                workspace_provider=workspace_provider,
                 hook_scope={
                     "space_id": space,
                     "actor_id": row["user_id"],
@@ -175,6 +176,8 @@ def get_run(rid, user):
     row = db.query("SELECT * FROM runs WHERE id=? AND space_id=?", (rid, user["space_id"]), True)
     if not row:
         raise HTTPException(404, "运行不存在")
+    if row["user_id"] != user["user_id"]:
+        raise HTTPException(403, "只能访问自己的会话运行")
     return row
 
 

@@ -3,6 +3,8 @@
 from pathlib import Path
 
 from ..tool_contracts import ToolDefinition, parameters
+from ..workspace import storage_call
+from ..workspace_store import PosixWorkspaceStore
 
 S = {"type": "string"}
 
@@ -15,27 +17,24 @@ def safe_file(root: Path, name: str):
 
 
 def prepare_workspace(context):
-    workspace = context.workspace
-    workspace.mkdir(parents=True, exist_ok=True)
-    workspace.chmod(0o777)
-    return workspace
+    return PosixWorkspaceStore(context.workspace).prepare()
 
 
 async def read(context, args):
-    workspace = prepare_workspace(context)
-    return safe_file(workspace, args["path"]).read_text()[:20000]
+    result = await storage_call(
+        PosixWorkspaceStore(context.workspace).read, args["path"], limit=1000
+    )
+    return result["content"]
 
 
 async def write(context, args):
-    workspace = prepare_workspace(context)
-    content = args["content"]
-    if len(content.encode()) > 2 * 1024 * 1024:
-        raise ValueError("单文件超过 2MB")
-    target = safe_file(workspace, args["path"])
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(content)
-    target.chmod(0o666)
-    return {"file": str(target.relative_to(context.root_workspace.resolve()))}
+    result = await storage_call(
+        PosixWorkspaceStore(context.workspace).write, args["path"], args["content"]
+    )
+    path = result["file"]
+    if context.instance != "main":
+        path = "subagents/" + context.instance + "/" + path
+    return {"file": path}
 
 
 def register(registry, snapshot, *, decrypt, search):

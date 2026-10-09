@@ -14,6 +14,7 @@ from .model_gateway import ProviderModelGateway
 from .module_contracts import ExecutionLimits
 from .modules import RuntimeModules
 from .tool_runtime import ToolRegistry, ToolRuntime
+from .workspace import WorkspaceProvider
 
 
 def create_engine(
@@ -35,6 +36,7 @@ def create_engine(
     context_manager=None,
     hooks=None,
     hook_scope=None,
+    workspace_provider=None,
 ):
     snapshot = deepcopy(snapshot)
     if snapshot["config"].get("hooks") and hooks is None:
@@ -75,14 +77,29 @@ def create_engine(
         hooks=hooks,
     )
     modules.bindings()  # Validate the durable contract before registering handlers.
+    # Historical checkpoints keep their exact tool catalog and original run root.
+    legacy_workspace = checkpoint is not None and "workspace_binding" not in checkpoint
+    if not legacy_workspace and registry is None:
+        workspace_provider = workspace_provider or WorkspaceProvider.standalone(workspace)
+        binding = workspace_provider.checkpoint_binding()
+        if checkpoint is not None and checkpoint.get("workspace_binding") != binding:
+            raise ValueError("检查点工作区身份不一致，请恢复原存储卷和会话绑定")
+    elif legacy_workspace:
+        workspace_provider = None
     if registry is None:
         registry = ToolRegistry()
         with registry.implementation_namespace("builtin-tools/v1"):
-            register_builtins(registry, snapshot, decrypt=decrypt, search=search)
+            register_builtins(
+                registry,
+                snapshot,
+                decrypt=decrypt,
+                search=search,
+                workspace_provider=workspace_provider,
+            )
     if configure_tools is not None:
         configure_tools(registry)
     tools = ToolRuntime(snapshot, registry=registry, hooks=modules.hooks, hook_scope=hook_scope)
-    return Engine(
+    engine = Engine(
         snapshot["config"],
         workspace,
         emit,
@@ -94,3 +111,6 @@ def create_engine(
         hook_scope=hook_scope,
         max_output_tokens=snapshot["model_obj"].get("max_output_tokens"),
     )
+    if workspace_provider is not None:
+        engine.state["workspace_binding"] = workspace_provider.checkpoint_binding()
+    return engine
