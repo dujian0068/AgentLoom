@@ -74,10 +74,12 @@ class Engine:
         if checkpoint is not None and "modules" in checkpoint:
             saved_bindings = deepcopy(checkpoint["modules"])
             if "hooks" not in saved_bindings:
-                if bindings["hooks"] != {
-                    "implementation": "hooks/v1",
-                    "config": HookManager().checkpoint_config(),
-                }:
+                if bindings["hooks"]["implementation"] != "hooks/v1" or bindings["hooks"][
+                    "config"
+                ] not in (
+                    HookManager().checkpoint_config(),
+                    {"total_timeout": 10.0, "bindings": []},
+                ):
                     raise ValueError("旧检查点不能追加 Hook 链；请显式迁移")
                 saved_bindings["hooks"] = bindings["hooks"]
             if "context" not in saved_bindings:
@@ -87,7 +89,10 @@ class Engine:
             if saved_bindings != bindings:
                 raise ValueError("检查点模块版本或配置不兼容；请使用原模块配置恢复")
         if checkpoint is not None and "modules" not in checkpoint:
-            if bindings["hooks"]["config"] != HookManager().checkpoint_config():
+            if bindings["hooks"]["config"] not in (
+                HookManager().checkpoint_config(),
+                {"total_timeout": 10.0, "bindings": []},
+            ):
                 raise ValueError("旧检查点不能追加 Hook 链；请显式迁移")
             builtin_ids = {
                 "model": "chat-completions/v1",

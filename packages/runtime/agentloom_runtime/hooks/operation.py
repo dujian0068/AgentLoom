@@ -173,21 +173,23 @@ async def execute_operation(
             )
 
 
-async def _notify(manager, point, kind, scope, operation, state, save, *, suppress=False):
+async def _notify(
+    manager, point, kind, scope, operation_state, pipeline_state, save, *, suppress=False
+):
     payload = {
         "kind": kind,
-        "stage": operation["stage"],
-        "actual_status": operation["actual_status"],
-        "error": operation.get("last_error"),
-        "completed_before": operation["before"].get("cursor", 0),
-        "completed_after": operation["after"].get("cursor", 0),
+        "stage": operation_state["stage"],
+        "actual_status": operation_state["actual_status"],
+        "error": operation_state.get("last_error"),
+        "completed_before": operation_state["before"].get("cursor", 0),
+        "completed_after": operation_state["after"].get("cursor", 0),
     }
     # A single exit may report an actual failure then an after-Hook failure; preserve
     # the first diagnostic pipeline without recursively running it a second time.
-    if state:
+    if pipeline_state:
         return
     try:
-        await manager.run(point, payload, scope=scope, state=state, save=save)
+        await manager.run(point, payload, scope=scope, state=pipeline_state, save=save)
     except asyncio.CancelledError:
         if not suppress:
             raise

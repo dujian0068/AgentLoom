@@ -1,16 +1,15 @@
 """Versioned extension and Hook-point catalogs, frozen when a manager is built."""
 
 import copy
-import hashlib
 import inspect
 import json
-import types
 from dataclasses import replace
 
 from jsonschema import Draft202012Validator
 
 from ..observation import freeze_observation
 from .contracts import HookDefinition, HookPoint
+from .fingerprint import handler_code_hash, legacy_handler_code_hash
 
 MAX_PAYLOAD_BYTES = 8 * 1024 * 1024
 
@@ -29,30 +28,10 @@ def identifier(value, label):
     return value
 
 
-def handler_code_hash(handler):
-    """Fingerprint the function's code; dependency versions need an explicit hash."""
-    try:
-        source = inspect.getsource(handler).encode("utf-8")
-    except (OSError, TypeError):
-
-        def code_data(code):
-            return {
-                "bytecode": code.co_code.hex(),
-                "names": code.co_names,
-                "variables": code.co_varnames,
-                "constants": [
-                    code_data(value) if isinstance(value, types.CodeType) else repr(value)
-                    for value in code.co_consts
-                ],
-            }
-
-        source = json.dumps(code_data(handler.__code__), sort_keys=True).encode("utf-8")
-    return "sha256:" + hashlib.sha256(source).hexdigest()
-
-
 class HookRegistry:
     def __init__(self):
         self._definitions = {}
+        self._legacy_hashes = {}
 
     def register(self, definition: HookDefinition):
         if not isinstance(definition, HookDefinition):
@@ -79,9 +58,11 @@ class HookRegistry:
             definition.observation,
             definition.code_hash or handler_code_hash(definition.handler),
         )
+        if definition.code_hash is None:
+            self._legacy_hashes[key] = legacy_handler_code_hash(definition.handler)
         return definition
 
-    def resolve(self, hook_id, version=None):
+    def resolve(self, hook_id, version=None, *, expected_hash=None, allow_legacy_hash=False):
         if version is not None:
             definition = self._definitions.get((hook_id, version))
         else:
@@ -91,17 +72,29 @@ class HookRegistry:
             definition = matches[0] if matches else None
         if definition is None:
             raise ValueError("Hook binding references an unregistered version")
+        if expected_hash is not None and expected_hash != definition.code_hash:
+            legacy = self._legacy_hashes.get((definition.hook_id, definition.version))
+            if not allow_legacy_hash or legacy is None or expected_hash != legacy:
+                raise ValueError("Published Hook code hash changed")
+            definition = replace(definition, code_hash=legacy)
         # The callable is an injected capability, not checkpoint data. In
         # particular deepcopy would silently clone a bound method's owner.
         return replace(definition, config_schema=copy.deepcopy(definition.config_schema))
 
 
 class HookPointRegistry:
-    def __init__(self, *, include_builtins=True):
+    def __init__(self, *, include_builtins=True, contract_version=2):
+        if type(contract_version) is not int or contract_version not in (1, 2):
+            raise ValueError("Unsupported Hook point contract version")
+        self._contract_version = contract_version
         self._points = {}
         if include_builtins:
-            for point in builtin_points():
+            for point in builtin_points(contract_version=contract_version):
                 self.register(point)
+
+    @property
+    def contract_version(self):
+        return self._contract_version
 
     def register(self, point: HookPoint):
         if not isinstance(point, HookPoint):
@@ -136,12 +129,14 @@ class HookPointRegistry:
             raise ValueError("Unknown Hook point") from None
 
     def snapshot(self):
-        result = HookPointRegistry(include_builtins=False)
+        result = HookPointRegistry(include_builtins=False, contract_version=self.contract_version)
         result._points = copy.deepcopy(self._points)
         return result
 
 
-def builtin_points():
+def builtin_points(*, contract_version=2):
+    if type(contract_version) is not int or contract_version not in (1, 2):
+        raise ValueError("Unsupported Hook point contract version")
     points = (
         HookPoint(
             "model.chat.before", "before", ("messages", "temperature", "top_p", "max_tokens"), True
@@ -273,9 +268,66 @@ def builtin_points():
         },
     }
     schemas["operation.finally"] = schemas["operation.error"]
-    # Capability validators additionally check required fields, immutable protocol
-    # groups, authorization and budgets against the exact versioned operation.
-    return tuple(
-        replace(point, schema={"type": "object", "properties": schemas[point.name]})
-        for point in points
-    )
+    if contract_version == 1:
+        # Rebuild the exact historical host-owned contracts for existing published
+        # chains. Never load executable validation contracts from a checkpoint.
+        return tuple(
+            replace(point, schema={"type": "object", "properties": schemas[point.name]})
+            for point in points
+        )
+
+    # These are the normalized capability-boundary envelopes, not arbitrary
+    # provider replies. Metadata and annotations remain optional. Authorization,
+    # protocol relationships and budgets are still enforced by each boundary.
+    schemas["run.after"] = {**schemas["run.after"], "outcome": nullable_string}
+    schemas["subagent.after"] = {**schemas["subagent.after"], "outcome": nullable_string}
+    diagnostics = {
+        key: value
+        for key, value in schemas["operation.error"].items()
+        if key not in {"operation", "status"}
+    }
+    schemas["operation.error"] = diagnostics
+    schemas["operation.finally"] = diagnostics
+    optional = {
+        "model.chat.after": {
+            "content",
+            "tool_calls",
+            "reasoning_content",
+            "usage",
+            "finish_reason",
+            "provider_request_id",
+            "annotations",
+        },
+        "model.embedding.after": {"usage", "provider_request_id"},
+        "tool.after": {"annotations"},
+        "context.compact.after": {"messages", "metrics", "summary_slot"},
+        "run.after": {"annotations"},
+        "subagent.after": {"annotations"},
+    }
+    result = []
+    for point in points:
+        properties = schemas[point.name]
+        schema = {
+            "type": "object",
+            "properties": properties,
+            "required": [key for key in properties if key not in optional.get(point.name, ())],
+            "additionalProperties": False,
+        }
+        if point.name == "model.chat.after":
+            # A normalized assistant reply can contain text, tool calls, or both.
+            # Provider-specific metadata is not mandatory for either shape.
+            schema["anyOf"] = [{"required": ["content"]}, {"required": ["tool_calls"]}]
+        elif point.name == "context.compact.after":
+            fields = ["messages", "metrics", "summary_slot"]
+            schema.update(
+                {
+                    "if": {"properties": {"compacted": {"const": True}}},
+                    "then": {"required": fields},
+                    "else": {
+                        "properties": {"summary": {"type": "null"}},
+                        "not": {"anyOf": [{"required": [key]} for key in fields]},
+                    },
+                }
+            )
+        result.append(replace(point, schema=schema))
+    return tuple(result)

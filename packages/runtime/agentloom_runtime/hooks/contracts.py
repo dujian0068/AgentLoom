@@ -1,5 +1,6 @@
 """The trusted Hook SDK. No runtime objects or execution callbacks enter a Hook."""
 
+import asyncio
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
@@ -55,7 +56,18 @@ class HookContext:
     binding_id: str
     config: Mapping
     scope: Mapping
+    # Unix timestamp retained for compatibility and log display, never for budgets.
     deadline: float
+    # Local to the event loop executing this Hook; never persist or transfer it.
+    deadline_monotonic: float | None = None
+
+    def remaining_seconds(self) -> float:
+        """Return this invocation's budget using its event loop's monotonic clock."""
+        if self.deadline_monotonic is None:
+            raise RuntimeError(
+                "HookContext has no monotonic deadline; use a manager-created context"
+            )
+        return max(0.0, self.deadline_monotonic - asyncio.get_running_loop().time())
 
     def __getattr__(self, name):
         if name in SCOPE_FIELDS:

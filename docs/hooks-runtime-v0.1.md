@@ -143,6 +143,25 @@ PYTHONPATH=apps/api:packages/runtime:. .venv/bin/uvicorn trusted_api:app --host 
 
 `annotations` 保存在操作 / 管道记录里，不会自动拼入回答正文或模型对话。需要改变模型可见内容时，应使用对应挂点明确允许的 `content` 或 `value` 字段。
 
+### 挂点载荷的版本与校验
+
+新建 `HookManager` 默认使用内建挂点契约 **v2**，发布清单中记录 `point_contract_version: 2`。各挂点声明真实边界必需的顶层字段，并设置 `additionalProperties: false`，因此直接使用 SDK 时也不能把 `{}` 或任意未知字段当作工具、模型等挂点的合法载荷。Hook 补丁应用后仍需通过同一 Schema，以及能力边界的授权、消息关联和预算检查。
+
+必需字段以实际调用协议为准，不要求所有可选元数据都出现。例如模型回复允许正文、工具调用或两者并存，`usage` / `annotations` 可省略；未发生压缩时结果只有 `compacted: false` 和 `summary: null`，真正压缩时才必须提供消息、指标与摘要位置；诊断挂点使用 `kind`、`stage`、`actual_status` 等字段，不要求不存在的 `operation` 或 `status`。
+
+旧发布清单没有 `point_contract_version`，恢复时保留历史 **v1** 契约。宿主通过 `HookManager(..., saved_config=published_config)` 选择内置版本并校验完整清单；平台 API 和 Runtime 恢复入口负责传入已保存配置。自行使用 SDK 时，需同时传入原部署注册表、原绑定和原管道超时，例如：
+
+```python
+restored_hooks = HookManager(
+    registry,
+    published_bindings,
+    total_timeout=published_config["total_timeout"],
+    saved_config=published_config,
+)
+```
+
+`published_config` 是宿主此前保存的 `checkpoint_config()`，不是用户提交的新契约。恢复只重建代码中已知的 v1 / v2 内建定义；自定义挂点仍由宿主显式注册。检查点里的 Schema 不会被安装为执行规则，绑定、代码哈希、配置、排序和挂点契约必须与重建的完整清单一致。新发布使用 v2；旧 Agent 重新发布后启用 v2，已有运行继续保留原契约。原绑定未指定扩展版本时，恢复仍使用清单中固定的版本，不因部署注册了新版本而改变。
+
 模型前置 Hook 的增量纳入最终预算校验；跨主动阈值时由宿主进行有界的重新准备，使用已保存补丁，不重放整个 Hook 链。硬预算校验是平台规则，不能由 Hook 关闭。
 
 ## 4. 匹配、版本与错误策略
@@ -152,11 +171,15 @@ PYTHONPATH=apps/api:packages/runtime:. .venv/bin/uvicorn trusted_api:app --host 
 - `instances=("main", "child")` 默认覆盖主任务与子任务。子任务使用自己的 `instance_id`、资源和工作区授权。
 - Chat 的 `purposes` 筛选 `action`、`compaction`、`completion`；内部既有 `verification` 显式映射为 `completion`。Chat 挂点不填 purposes 时只匹配 `action`，防止回答改写污染压缩摘要或完成检查 JSON。Embedding 默认匹配 `document` 与 `query`，通过知识库管理绑定，不继承 Agent 的业务 Hook。
 - `targets` 筛选边界的稳定目标：工具为 tool_id，模型为 model_id。配置字段按扩展的 JSON Schema 验证。
-- `timeout` 单位为秒，默认 1 秒；`HookManager.total_timeout` 默认每阶段管道 10 秒。可信函数仍需遵循异步协作式取消，进程内执行不提供恶意代码隔离。
+- `timeout` 单位为秒，默认 1 秒；`HookManager.total_timeout` 默认每阶段管道 10 秒。Hook 计算剩余时间使用 `ctx.remaining_seconds()` 或事件循环单调时钟与 `ctx.deadline_monotonic`；`ctx.deadline` 保留为展示用的墙钟时间，不应用来计算预算。可信函数仍需遵循异步协作式取消，进程内执行不提供恶意代码隔离。
 - `failure_policy="block"` 是默认值。只有声明 `observation=True` 的观察扩展可以选 `continue`；观察扩展只能返回 `Continue`。错误 / 清理阶段的普通 Hook 异常仅形成诊断，不替换原始失败。
 - `replay_safe=False` 是默认值。只有可安全重算的纯数据转换才设为 `True`；有外部副作用的扩展不可仅为了通过恢复检查而开启它。
 
-模块检查点包含扩展 ID / 版本、代码哈希、配置、匹配、顺序、错误策略和挂点契约。默认哈希来自函数源码或字节码；依赖包、全局配置和资源版本需要部署者提供覆盖这些内容的显式 `code_hash`。恢复时配置变更会被拒绝；不要用同一个版本号替换实现。旧检查点只能迁移到空 Hook 链，不能恢复途中悄悄添加扩展。
+模块检查点包含扩展 ID / 版本、代码哈希、配置、匹配、顺序、错误策略和挂点契约。普通文件内函数保持既有源码 SHA-256，以免仅升级哈希算法就改变已有发布身份。取不到源码的动态函数使用 `sha256:bytecode-v2:` 指纹，按类型递归编码常量，并对无序集合排序，避免 Python 哈希随机种子改变同一函数的结果；指纹也包含 Python 运行时版本标识，不能据此承诺跨 Python 版本直接恢复。
+
+函数源码或字节码不能代表闭包捕获值、装饰器依赖、绑定实例状态、依赖包、全局配置和资源版本。需要这些内容参与发布身份时，部署者应提供覆盖相应制品和配置的显式 `HookDefinition.code_hash`。不能随意修改同一版本的实现，或为了绕过检查填写固定字符串。
+
+旧动态指纹只在当前部署能精确重算并匹配时用于校验既有清单，不再用于新发布。若旧指纹受随机种子影响、当前部署无法验证，恢复仍会被阻断；需回到原部署核对并按实际运行状态处理，不能忽略哈希或把未知代码当作原版本继续执行。恢复时配置变更同样会被拒绝。早期完全没有 Hooks 清单的检查点只能兼容为空 Hook 链，不能恢复途中悄悄添加扩展。
 
 ## 5. 真实结果、恢复与取消
 
@@ -187,6 +210,8 @@ PYTHONPATH=apps/api:packages/runtime:. .venv/bin/uvicorn trusted_api:app --host 
 现有检查点由宿主保存完整操作载荷；API 宿主沿用加密存储和脱敏边界。纯 Python 使用者须自行提供相应存储保护，不应将示例的内存列表当作生产检查点服务。
 
 ## 7. 验证记录
+
+2026-10-09 Hook 审查修复：最新后端全量 **540 项通过**，前端 **12 项通过**，Python / Vue 格式检查、TypeScript 检查及生产构建通过。新增验证覆盖四个 Python 哈希随机种子、动态字节码的类型与常量、墙钟前后跳变、挂点严格契约、旧动态指纹校验、v1 发布与早期无清单发布的 API 恢复，以及同批工具调用的独立记录。数据库使用临时 SQLite，没有连接用户的远程 PostgreSQL。
 
 2026-10-08 执行 `PYTHON_DOTENV_DISABLED=1 bash deploy/check.sh`：302 个后端测试、12 个前端测试通过，Python / Vue 格式检查、TypeScript 检查和生产构建通过。数据库测试使用临时 SQLite，没有连接或迁移用户的远程 PostgreSQL；模型使用确定性替身，工具集成包含本地 MCP 服务。
 

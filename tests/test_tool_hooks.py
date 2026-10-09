@@ -31,6 +31,44 @@ from agentloom_runtime.tool_runtime import ToolRegistry, ToolRuntime
 from test_harness import answer, call, decision, snapshot
 
 
+def test_same_batch_tool_calls_keep_distinct_durable_operation_records(tmp_path, monkeypatch):
+    batch = call("workspace_write", {"path": "batch.txt", "content": "retained"}, "write-1")
+    batch["tool_calls"] += call("workspace_read", {"path": "batch.txt"}, "read-2")["tool_calls"]
+    batch["tool_calls"] += call("workspace_stat", {"path": "batch.txt"}, "stat-3")["tool_calls"]
+    replies = [batch, answer("done")]
+    saved = []
+
+    async def chat(model, messages, tools, secret):
+        return replies.pop(0) if tools else decision()
+
+    monkeypatch.setattr(provider, "chat", chat)
+    engine = create_engine(
+        snapshot(),
+        tmp_path,
+        lambda *args: None,
+        lambda value: value,
+        None,
+        save=lambda state: saved.append(copy.deepcopy(state)),
+    )
+
+    async def run():
+        try:
+            assert await engine.execute("write, read and inspect a file") == "done"
+        finally:
+            await engine.close()
+
+    asyncio.run(run())
+    records = saved[-1]["tool_operations"]
+    assert len(records) == 3
+    assert {record["scope"]["call_id"] for record in records.values()} == {
+        "write-1",
+        "read-2",
+        "stat-3",
+    }
+    assert all(record["stage"] == "completed" for record in records.values())
+    assert all(request_id == record["operation_id"] for request_id, record in records.items())
+
+
 def hook_manager(*items):
     registry = HookRegistry()
     bindings = []

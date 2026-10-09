@@ -59,8 +59,20 @@ def hook_manager(config, saved_manifest=_PUBLISHING):
         except (KeyError, TypeError):
             raise ValueError("已发布 Hook 绑定与版本清单不一致") from None
     try:
-        manager = HookManager(TRUSTED_HOOKS, [HookBinding(**value) for value in bindings])
+        manager = HookManager(
+            TRUSTED_HOOKS,
+            [HookBinding(**value) for value in bindings],
+            saved_config=saved_manifest["config"]
+            if saved_manifest is not _PUBLISHING and saved_manifest is not None
+            else {"total_timeout": 10.0, "bindings": []}
+            if saved_manifest is None
+            else None,
+        )
     except (ValueError, TypeError):
+        if saved_manifest is not _PUBLISHING and saved_manifest is not None:
+            raise ValueError(
+                "已发布 Hook 的版本、代码或配置已变化，请恢复原部署或重新发布 Agent"
+            ) from None
         raise ValueError("Hook 绑定不可用，请检查部署注册的扩展版本、挂点和配置") from None
     if (
         saved_manifest is not _PUBLISHING

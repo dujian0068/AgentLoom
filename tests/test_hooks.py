@@ -37,6 +37,39 @@ def entry(name, point, handler, *, replay_safe=True, observation=False, **bindin
     )
 
 
+def point_payload(point, **overrides):
+    """Use the same complete v2 envelopes emitted by capability boundaries."""
+    payloads = {
+        "tool.before": {
+            "name": "search",
+            "tool_id": "search",
+            "implementation_id": None,
+            "parameters": {"type": "object"},
+            "arguments": {},
+        },
+        "tool.after": {"value": "result", "status": "succeeded", "evidence_arguments": {}},
+        "model.chat.before": {
+            "messages": [],
+            "tools": [],
+            "model_id": "model-1",
+            "purpose": "action",
+            "temperature": None,
+            "top_p": None,
+            "max_tokens": None,
+        },
+        "model.chat.after": {"role": "assistant", "content": "result"},
+        "context.prepare.before": {
+            "task": "task",
+            "plan": [],
+            "messages": [],
+            "tools": [],
+            "additional_messages": [],
+        },
+        "run.before": {"task": "task"},
+    }
+    return {**copy.deepcopy(payloads[point]), **overrides}
+
+
 def run(coroutine):
     return asyncio.run(coroutine)
 
@@ -62,7 +95,7 @@ def test_order_readonly_config_and_validated_prior_patch():
         entry("second", "tool.before", second, priority=20),
         entry("first", "tool.before", first, priority=10, config={"nested": {"value": 1}}),
     )
-    original = {"name": "search", "arguments": {"limit": 30}}
+    original = point_payload("tool.before", arguments={"limit": 30})
     state = {}
     result = run(
         manager.run(
@@ -91,7 +124,11 @@ def test_equal_priority_uses_published_order_and_duplicate_binding_rejected():
     registry.register(HookDefinition("same", "v1", observe))
     bindings = [HookBinding("z", "same", "tool.before"), HookBinding("a", "same", "tool.before")]
     manager = HookManager(registry, bindings)
-    run(manager.run("tool.before", {}, scope={}, state={}, save=lambda: None))
+    run(
+        manager.run(
+            "tool.before", point_payload("tool.before"), scope={}, state={}, save=lambda: None
+        )
+    )
     assert seen == ["z", "a"]
     with pytest.raises(ValueError, match="unique"):
         HookManager(registry, [bindings[0], bindings[0]])
@@ -126,7 +163,15 @@ def test_purpose_target_and_child_filters_and_completion_alias():
         {"purpose": "verification", "instance_id": "sub1", "target": "m1"},
         {"purpose": "verification", "instance_id": "sub2", "target": "m2"},
     ):
-        run(manager.run("model.chat.after", {}, scope=scope, state={}, save=lambda: None))
+        run(
+            manager.run(
+                "model.chat.after",
+                point_payload("model.chat.after"),
+                scope=scope,
+                state={},
+                save=lambda: None,
+            )
+        )
     assert seen == [("default", "action", "main"), ("completion", "completion", "sub1")]
 
 
@@ -142,7 +187,10 @@ def test_purpose_target_and_child_filters_and_completion_alias():
     ],
 )
 def test_protected_fields_and_wrong_decisions_fail_closed(point, decision):
+    seen = []
+
     async def bad(ctx, payload):
+        seen.append(ctx.point)
         return decision
 
     manager = manager_for(entry("bad", point, bad))
@@ -150,12 +198,13 @@ def test_protected_fields_and_wrong_decisions_fail_closed(point, decision):
         run(
             manager.run(
                 point,
-                {},
+                point_payload(point),
                 scope={"purpose": "action"},
                 state={},
                 save=lambda: None,
             )
         )
+    assert seen == [point]
 
 
 def test_invalid_patch_stops_before_next_hook_and_action():
@@ -170,7 +219,7 @@ def test_invalid_patch_stops_before_next_hook_and_action():
 
     async def action(payload):
         seen.append("action")
-        return {"value": "done"}
+        return point_payload("tool.after", value="done")
 
     def validate(payload):
         assert payload["arguments"]["limit"] >= 0
@@ -182,7 +231,7 @@ def test_invalid_patch_stops_before_next_hook_and_action():
             execute_operation(
                 manager,
                 "tool",
-                {"arguments": {"limit": 1}},
+                point_payload("tool.before", arguments={"limit": 1}),
                 action,
                 scope={},
                 state=state,
@@ -211,7 +260,13 @@ def test_rejection_is_durable_and_no_real_operation_occurs():
         with pytest.raises(HookRejected) as error:
             run(
                 execute_operation(
-                    manager, "tool", {}, action, scope={}, state=state, save=lambda: None
+                    manager,
+                    "tool",
+                    point_payload("tool.before"),
+                    action,
+                    scope={},
+                    state=state,
+                    save=lambda: None,
                 )
             )
         assert error.value.code == "permission_denied"
@@ -229,7 +284,7 @@ def test_only_observers_can_fail_open_and_cannot_patch():
         entry("observer", "tool.before", observe, observation=True, failure_policy="continue")
     )
     state = {}
-    original = {"arguments": {"limit": 4}}
+    original = point_payload("tool.before", arguments={"limit": 4})
     assert (
         run(manager.run("tool.before", original, scope={}, state=state, save=lambda: None))
         == original
@@ -249,7 +304,15 @@ def test_independent_and_total_timeout_and_cancellation():
     )
     state = {}
     with pytest.raises(HookFailed):
-        run(manager.run("tool.before", {}, scope={}, state=state, save=lambda: None))
+        run(
+            manager.run(
+                "tool.before",
+                point_payload("tool.before"),
+                scope={},
+                state=state,
+                save=lambda: None,
+            )
+        )
     assert state["records"][0]["status"] == "completed"
     assert state["records"][1]["error"] == "timeout"
 
@@ -267,7 +330,13 @@ def test_independent_and_total_timeout_and_cancellation():
         current = manager_for(entry("wait", "tool.before", cancellable))
         durable = {}
         task = asyncio.create_task(
-            current.run("tool.before", {}, scope={}, state=durable, save=lambda: None)
+            current.run(
+                "tool.before",
+                point_payload("tool.before"),
+                scope={},
+                state=durable,
+                save=lambda: None,
+            )
         )
         await started.wait()
         task.cancel()
@@ -292,7 +361,7 @@ def test_after_failure_restores_real_result_without_repeating_action_or_complete
         calls.append("flaky")
         assert payload["value"] == "redacted"
         assert any(
-            saved.get("raw_output") == {"value": "private", "status": "succeeded"}
+            saved.get("raw_output") == point_payload("tool.after", value="private")
             for saved in checkpoints
         )
         if fail:
@@ -301,7 +370,7 @@ def test_after_failure_restores_real_result_without_repeating_action_or_complete
 
     async def action(payload):
         calls.append("action")
-        return {"value": "private", "status": "succeeded"}
+        return point_payload("tool.after", value="private")
 
     manager = manager_for(entry("first", "tool.after", first), entry("flaky", "tool.after", flaky))
     state = {"operation_id": "stable"}
@@ -310,7 +379,7 @@ def test_after_failure_restores_real_result_without_repeating_action_or_complete
         return execute_operation(
             manager,
             "tool",
-            {"arguments": {}},
+            point_payload("tool.before"),
             action,
             scope={"operation_id": "stable"},
             state=state,
@@ -341,7 +410,7 @@ def test_unsafe_hook_and_unknown_action_require_explicit_reconciliation():
 
     async def action(payload):
         calls.append("action")
-        return {"value": "done"}
+        return point_payload("tool.after", value="done")
 
     manager = manager_for(entry("unsafe", "tool.after", unsafe, replay_safe=False))
     state = {}
@@ -349,7 +418,13 @@ def test_unsafe_hook_and_unknown_action_require_explicit_reconciliation():
         with pytest.raises(error):
             run(
                 execute_operation(
-                    manager, "tool", {}, action, scope={}, state=state, save=lambda: None
+                    manager,
+                    "tool",
+                    point_payload("tool.before"),
+                    action,
+                    scope={},
+                    state=state,
+                    save=lambda: None,
                 )
             )
     assert calls == ["action", "hook"]
@@ -361,14 +436,34 @@ def test_unsafe_hook_and_unknown_action_require_explicit_reconciliation():
     empty = HookManager()
     state = {}
     with pytest.raises(RuntimeError):
-        run(execute_operation(empty, "tool", {}, unknown, scope={}, state=state, save=lambda: None))
+        run(
+            execute_operation(
+                empty,
+                "tool",
+                point_payload("tool.before"),
+                unknown,
+                scope={},
+                state=state,
+                save=lambda: None,
+            )
+        )
     with pytest.raises(HookRecoveryRequired):
-        run(execute_operation(empty, "tool", {}, action, scope={}, state=state, save=lambda: None))
+        run(
+            execute_operation(
+                empty,
+                "tool",
+                point_payload("tool.before"),
+                action,
+                scope={},
+                state=state,
+                save=lambda: None,
+            )
+        )
     result = run(
         execute_operation(
             empty,
             "tool",
-            {},
+            point_payload("tool.before"),
             action,
             scope={},
             state=state,
@@ -376,7 +471,7 @@ def test_unsafe_hook_and_unknown_action_require_explicit_reconciliation():
             resume_inflight=True,
         )
     )
-    assert result == {"value": "done"}
+    assert result == point_payload("tool.after", value="done")
     assert calls[-2:] == ["unknown", "action"]
 
 
@@ -398,7 +493,7 @@ def test_raw_result_is_saved_even_when_output_validation_fails():
                 execute_operation(
                     manager,
                     "tool",
-                    {},
+                    point_payload("tool.before"),
                     action,
                     scope={},
                     state=state,
@@ -430,7 +525,7 @@ def test_diagnostics_never_mask_failure_and_do_not_receive_secrets():
             execute_operation(
                 manager,
                 "tool",
-                {"arguments": {"private": "secret"}},
+                point_payload("tool.before", arguments={"private": "secret"}),
                 action,
                 scope={},
                 state=state,
@@ -454,10 +549,22 @@ def test_snapshot_freezes_registration_and_changed_bindings_reject_recovery():
     config["x"] = 2
     assert manager.checkpoint_config()["bindings"][0]["config"]["x"] == 1
     state = {}
-    run(manager.run("tool.before", {}, scope={}, state=state, save=lambda: None))
+    run(
+        manager.run(
+            "tool.before", point_payload("tool.before"), scope={}, state=state, save=lambda: None
+        )
+    )
     different = HookManager(registry, [binding])
     with pytest.raises(HookRecoveryRequired):
-        run(different.run("tool.before", {}, scope={}, state=state, save=lambda: None))
+        run(
+            different.run(
+                "tool.before",
+                point_payload("tool.before"),
+                scope={},
+                state=state,
+                save=lambda: None,
+            )
+        )
 
 
 def test_schema_finite_json_async_handlers_and_custom_point():
@@ -483,7 +590,15 @@ def test_schema_finite_json_async_handlers_and_custom_point():
     with pytest.raises(ValueError, match="finite"):
         run(manager.run("tool.before", {"x": float("nan")}, scope={}, state={}, save=lambda: None))
     with pytest.raises(ValueError, match="identity"):
-        run(manager.run("tool.before", {}, scope={"secret": "key"}, state={}, save=lambda: None))
+        run(
+            manager.run(
+                "tool.before",
+                point_payload("tool.before"),
+                scope={"secret": "key"},
+                state={},
+                save=lambda: None,
+            )
+        )
     points = HookPointRegistry()
     points.register(HookPoint("custom.before", "before", ("text",), schema={"type": "object"}))
     manager = HookManager(points=points)
@@ -504,7 +619,15 @@ def test_checkpoint_failure_stops_dispatch():
 
     with pytest.raises(ToolPersistenceError, match="persisted"):
         run(
-            execute_operation(HookManager(), "tool", {}, action, scope={}, state={}, save=fail_save)
+            execute_operation(
+                HookManager(),
+                "tool",
+                point_payload("tool.before"),
+                action,
+                scope={},
+                state={},
+                save=fail_save,
+            )
         )
     assert calls == []
 
@@ -525,7 +648,7 @@ def test_preparation_resumes_without_repeating_input_hooks():
 
     async def action(payload):
         calls.append(payload["messages"][0]["content"])
-        return {"content": "done"}
+        return point_payload("model.chat.after", content="done")
 
     manager = manager_for(entry("before", "model.chat.before", before))
     state = {}
@@ -534,7 +657,7 @@ def test_preparation_resumes_without_repeating_input_hooks():
         return execute_operation(
             manager,
             "model.chat",
-            {"messages": []},
+            point_payload("model.chat.before"),
             action,
             scope={"purpose": "action"},
             state=state,
@@ -547,7 +670,7 @@ def test_preparation_resumes_without_repeating_input_hooks():
     assert state["actual_status"] == "not_started"
     assert state["stage"] == "preparing"
     fail = False
-    assert run(execute()) == {"content": "done"}
+    assert run(execute()) == point_payload("model.chat.after", content="done")
     assert calls == ["hook", "prepare", "prepare", "compressed"]
 
 
@@ -563,9 +686,21 @@ def test_code_change_under_same_version_is_detected_at_recovery():
     assert before.checkpoint_config()["bindings"][0]["code_hash"].startswith("sha256:")
     assert before.checkpoint_config() != after.checkpoint_config()
     state = {}
-    run(before.run("tool.before", {}, scope={}, state=state, save=lambda: None))
+    run(
+        before.run(
+            "tool.before", point_payload("tool.before"), scope={}, state=state, save=lambda: None
+        )
+    )
     with pytest.raises(HookRecoveryRequired):
-        run(after.run("tool.before", {}, scope={}, state=state, save=lambda: None))
+        run(
+            after.run(
+                "tool.before",
+                point_payload("tool.before"),
+                scope={},
+                state=state,
+                save=lambda: None,
+            )
+        )
 
 
 def test_cancelled_actual_action_stays_unknown_and_is_not_repeated():
@@ -590,7 +725,7 @@ def test_cancelled_actual_action_stays_unknown_and_is_not_repeated():
             return execute_operation(
                 manager,
                 "tool",
-                {},
+                point_payload("tool.before"),
                 action,
                 scope={},
                 state=state,
@@ -621,7 +756,11 @@ def test_typed_point_schema_rejects_invalid_field_shapes():
         ("model.chat.before", {"temperature": -1}),
     ):
         with pytest.raises(HookFailed, match="schema"):
-            run(manager.run(point, payload, scope={}, state={}, save=lambda: None))
+            run(
+                manager.run(
+                    point, point_payload(point, **payload), scope={}, state={}, save=lambda: None
+                )
+            )
 
 
 def test_async_bound_handler_keeps_its_registered_owner():
@@ -635,7 +774,11 @@ def test_async_bound_handler_keeps_its_registered_owner():
 
     counter = Counter()
     manager = manager_for(entry("bound", "tool.before", counter.hook))
-    run(manager.run("tool.before", {}, scope={}, state={}, save=lambda: None))
+    run(
+        manager.run(
+            "tool.before", point_payload("tool.before"), scope={}, state={}, save=lambda: None
+        )
+    )
     assert counter.calls == 1
 
 
@@ -674,7 +817,7 @@ def test_cached_final_input_is_revalidated_before_actual_dispatch():
 
     async def action(payload):
         calls.append("action")
-        return {"value": "done"}
+        return point_payload("tool.after", value="done")
 
     def final_guard(payload):
         calls.append("guard")
@@ -693,7 +836,7 @@ def test_cached_final_input_is_revalidated_before_actual_dispatch():
         return execute_operation(
             manager,
             "tool",
-            {},
+            point_payload("tool.before"),
             action,
             scope={},
             state=state,

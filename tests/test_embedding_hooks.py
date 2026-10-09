@@ -166,7 +166,18 @@ def test_embedding_default_filters_include_documents_and_queries_only():
     call(owner, purpose="query")
     asyncio.run(
         manager.run(
-            "model.embedding.before", {}, scope={"purpose": "action"}, state={}, save=lambda: None
+            "model.embedding.before",
+            {
+                "texts": [{"index": 0, "text": "document"}],
+                "model_id": "embed-1",
+                "index_signature": "signature-1",
+                "dimensions": None,
+                "encoding_format": "float",
+                "purpose": "document",
+            },
+            scope={"purpose": "action"},
+            state={},
+            save=lambda: None,
         )
     )
     assert seen == ["document", "query"]

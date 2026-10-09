@@ -41,7 +41,15 @@ def create_engine(
     snapshot = deepcopy(snapshot)
     if snapshot["config"].get("hooks") and hooks is None:
         raise ValueError("已配置 Hooks 的发布版本必须显式解析可信 Hook 注册表")
-    hooks = hooks if hooks is not None else HookManager()
+    if hooks is None:
+        saved_hooks = (snapshot.get("hook_manifest") or {}).get("config")
+        if saved_hooks is None and checkpoint is not None:
+            saved_hooks = (
+                checkpoint.get("modules", {})
+                .get("hooks", {})
+                .get("config", {"total_timeout": 10.0, "bindings": []})
+            )
+        hooks = HookManager(saved_config=saved_hooks)
     if "hook_manifest" in snapshot and snapshot["hook_manifest"] != {
         "module_id": hooks.module_id,
         "config": hooks.checkpoint_config(),

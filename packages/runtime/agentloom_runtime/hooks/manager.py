@@ -87,7 +87,25 @@ async def validate_payload(payload, validator):
 class HookManager:
     module_id = "hooks/v1"
 
-    def __init__(self, registry=None, bindings=(), points=None, total_timeout=10):
+    def __init__(
+        self, registry=None, bindings=(), points=None, total_timeout=10, *, saved_config=None
+    ):
+        expected = json_copy(saved_config) if saved_config is not None else None
+        if expected is not None and (
+            type(expected) is not dict
+            or not {"total_timeout", "bindings"} <= expected.keys()
+            or expected.keys() - {"total_timeout", "bindings", "point_contract_version"}
+            or type(expected["bindings"]) is not list
+            or any(type(item) is not dict for item in expected["bindings"])
+        ):
+            raise ValueError("Invalid saved Hook configuration")
+        contract_version = expected.get("point_contract_version", 1) if expected is not None else 2
+        if (
+            points is not None
+            and expected is not None
+            and points.contract_version != contract_version
+        ):
+            raise ValueError("Saved Hook point contract version changed")
         if (
             isinstance(total_timeout, bool)
             or not isinstance(total_timeout, (int, float))
@@ -97,7 +115,7 @@ class HookManager:
         ):
             raise ValueError("Hook pipeline timeout must be within (0, 300] seconds")
         self.total_timeout = float(total_timeout)
-        self.points = (points or HookPointRegistry()).snapshot()
+        self.points = (points or HookPointRegistry(contract_version=contract_version)).snapshot()
         self.executor = HookExecutor()
         self._bindings = []
         self._closed = False
@@ -112,7 +130,26 @@ class HookManager:
                 raise ValueError("Hook binding IDs must be unique")
             identities.add(binding.binding_id)
             point = self.points.resolve(binding.point)
-            definition = registry.resolve(binding.hook_id, binding.version)
+            saved_binding = (
+                next(
+                    (
+                        item
+                        for item in expected["bindings"]
+                        if item.get("binding_id") == binding.binding_id
+                    ),
+                    None,
+                )
+                if expected is not None
+                else None
+            )
+            definition = registry.resolve(
+                binding.hook_id,
+                binding.version
+                if binding.version is not None or saved_binding is None
+                else saved_binding.get("version"),
+                expected_hash=saved_binding.get("code_hash") if saved_binding else None,
+                allow_legacy_hash=self.points.contract_version == 1,
+            )
             if type(binding.priority) is not int:
                 raise ValueError("Hook priority must be an integer")
             if (
@@ -155,12 +192,15 @@ class HookManager:
             }
             self._bindings.append((binding, definition, json_copy(signature)))
         self._bindings.sort(key=lambda entry: (entry[0].priority, entry[2]["order"]))
+        if expected is not None and self.checkpoint_config() != expected:
+            raise ValueError("Published Hook configuration or point contract changed")
 
     def checkpoint_config(self):
         return json_copy(
             {
                 "total_timeout": self.total_timeout,
                 "bindings": [entry[2] for entry in self._bindings],
+                **({"point_contract_version": 2} if self.points.contract_version == 2 else {}),
             }
         )
 
@@ -249,6 +289,7 @@ class HookManager:
                 freeze_observation(binding.config),
                 freeze_observation(scope),
                 time.time() + min(binding.timeout, remaining),
+                deadline_monotonic=started + min(binding.timeout, remaining),
             )
             try:
                 if remaining <= 0:

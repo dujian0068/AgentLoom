@@ -1,10 +1,23 @@
 """Published API bindings use trusted deployed code and immutable Hook manifests."""
 
+import copy
+import json
+
 import pytest
+from agentloom import store as db
+from agentloom.services import agents as agent_service
 from agentloom.services import hooks as service
 from agentloom_runtime import provider
-from agentloom_runtime.hooks import HookDefinition, HookRegistry, PatchOutput
+from agentloom_runtime.hooks import (
+    HookBinding,
+    HookDefinition,
+    HookManager,
+    HookPointRegistry,
+    HookRegistry,
+    PatchOutput,
+)
 from test_harness import answer, decision
+from test_hook_recovery_api import checkpoint
 from test_platform import add_agent, config, wait_run
 
 
@@ -62,6 +75,7 @@ def test_published_binding_executes_and_draft_or_new_versions_do_not_change_it(
     response = client.post(f"/api/agents/{agent['id']}/publish")
     assert response.status_code == 200
     snapshot = client.get(f"/api/agents/{agent['id']}/versions/1").json()
+    assert snapshot["hook_manifest"]["config"]["point_contract_version"] == 2
     frozen = snapshot["hook_manifest"]["config"]["bindings"][0]
     assert frozen["version"] == "v1" and frozen["code_hash"].startswith("sha256:")
     assert frozen["config"] == {"prefix": "published:"}
@@ -132,3 +146,89 @@ def test_legacy_snapshots_accept_empty_hooks_only():
     assert service.hook_manager({}, None).checkpoint_config()["bindings"] == []
     with pytest.raises(ValueError, match="缺少 Hook 清单"):
         service.hook_manager({"hooks": [binding()]}, None)
+
+
+def test_v1_published_api_run_restores_real_response_after_upgrade(client, model, monkeypatch):
+    calls = {"model": 0, "after": 0}
+
+    async def after(ctx, reply):
+        calls["after"] += 1
+        if calls["after"] == 1:
+            raise RuntimeError("temporary postprocessing failure")
+        return PatchOutput({"content": ctx.config["prefix"] + reply["content"]})
+
+    async def chat(model, messages, tools, secret):
+        if not tools:
+            return decision()
+        calls["model"] += 1
+        return answer("retained response")
+
+    install(monkeypatch, after)
+    monkeypatch.setattr(provider, "chat", chat)
+    legacy = HookManager(
+        service.TRUSTED_HOOKS,
+        [HookBinding(**binding())],
+        points=HookPointRegistry(contract_version=1),
+    )
+    original_manifest = service.hook_manifest(legacy)
+    # Produce a historical publication with its original host-defined contracts.
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            agent_service, "published_hook_manifest", lambda _: copy.deepcopy(original_manifest)
+        )
+        agent = add_agent(client, model, hooks=[binding()])
+        assert client.post(f"/api/agents/{agent['id']}/publish").status_code == 200
+    failed = start(client, agent["id"])
+    assert failed["status"] == "failed" and not failed["requires_model_retry"]
+    rid = failed["id"]
+    saved = checkpoint(rid)
+    assert saved["modules"]["hooks"]["config"] == original_manifest["config"]
+    assert any(
+        op.get("raw_output", {}).get("content") == "retained response"
+        for op in saved["operations"].values()
+    )
+    response = client.post(f"/api/v1/runs/{rid}/resume", json={"stream": True})
+    assert response.status_code == 200 and "run.completed" in response.text
+    completed = wait_run(client, rid)
+    assert completed["output"] == "published:retained response"
+    assert calls == {"model": 1, "after": 2}
+    assert (
+        client.get(f"/api/agents/{agent['id']}/versions/1").json()["hook_manifest"]
+        == original_manifest
+    )
+
+
+def test_pre_manifest_publication_keeps_its_v1_empty_checkpoint(client, model, monkeypatch):
+    calls = {"model": 0, "review": 0}
+
+    async def chat(model, messages, tools, secret):
+        if tools:
+            calls["model"] += 1
+            return answer("old publication result")
+        calls["review"] += 1
+        if calls["review"] == 1:
+            raise OSError("review result unknown")
+        return decision()
+
+    monkeypatch.setattr(provider, "chat", chat)
+    agent = add_agent(client, model)
+    assert client.post(f"/api/agents/{agent['id']}/publish").status_code == 200
+    row = db.query(
+        "SELECT snapshot FROM versions WHERE agent_id=? AND version=1", (agent["id"],), True
+    )
+    historical = json.loads(row["snapshot"])
+    historical.pop("hook_manifest")
+    db.execute(
+        "UPDATE versions SET snapshot=? WHERE agent_id=? AND version=1",
+        (json.dumps(historical), agent["id"]),
+    )
+    failed = start(client, agent["id"])
+    rid = failed["id"]
+    assert failed["requires_model_retry"]
+    assert checkpoint(rid)["modules"]["hooks"]["config"] == {"total_timeout": 10.0, "bindings": []}
+    response = client.post(
+        f"/api/v1/runs/{rid}/resume", json={"stream": True, "retry_unknown_models": True}
+    )
+    assert response.status_code == 200 and "run.completed" in response.text
+    assert wait_run(client, rid)["output"] == "old publication result"
+    assert calls == {"model": 1, "review": 2}
