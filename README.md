@@ -6,7 +6,7 @@
 
 ## 文档
 
-推荐通过网页阅读：在项目根执行 `npm ci`、`npm run docs:dev`，打开 http://127.0.0.1:8767 。文档站提供固定目录、中文搜索、章节定位和连续翻页。正文仍为 Markdown，GitHub 入口是[文档目录](docs/README.md)；构建与部署见[文档站说明](docs/documentation-site.md)。
+推荐通过[在线文档站](https://dujian0068.github.io/AgentLoom/)阅读，提供固定目录、中文搜索、章节定位和连续翻页。也可以在项目根执行 `npm ci`、`npm run docs:dev`，打开 http://127.0.0.1:8767 。正文仍为 Markdown，GitHub 入口是[文档目录](docs/README.md)；构建与部署见[文档站说明](docs/documentation-site.md)。
 
 | 文档                                              | 内容                                                     |
 | ------------------------------------------------- | -------------------------------------------------------- |

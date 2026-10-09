@@ -20,7 +20,7 @@ npm run docs:build
 npm run docs:preview
 ```
 
-输出位于 `docs/.vitepress/dist`，可以部署到静态 Web 服务器。预览默认也使用端口 8767，先关闭同端口开发服务再启动预览。
+输出位于 `docs/.vitepress/dist`，可以部署到静态 Web 服务器。预览默认也使用端口 8767，先关闭同端口开发服务再启动预览。重新构建后须重启预览服务，再刷新浏览器，避免旧页面引用已替换的资源。
 
 构建产物、依赖和缓存被 Git 忽略；提交 Markdown、主题、配置和根目录的 package-lock.json 即可。
 
@@ -33,9 +33,26 @@ AGENTLOOM_DOCS_BASE=/AgentLoom/ npm run docs:build
 AGENTLOOM_DOCS_BASE=/AgentLoom/ npm run docs:preview
 ```
 
-上传 dist 内容到服务器的对应路径。此配置没有自动开启 GitHub Pages，也没有公开发布文档；上线时按仓库可见性和部署环境决定访问范围。
+上传 dist 内容到服务器的对应路径。GitHub Pages 使用下面的自动部署流程；自行部署服务器时仍可使用这些命令。
 
 站内使用 `.html` 地址，静态服务器无需配置单页应用回退。保留 `404.html` 作为未找到页面。首页为 `index.html`。
+
+## GitHub Pages 自动部署
+
+项目文档入口：[AgentLoom 文档站](https://dujian0068.github.io/AgentLoom/)。这是 `AgentLoom` 仓库的项目站，与个人博客分别部署；如果个人 Pages 配了自定义域名，访问时可能跳转到该域名下的 `/AgentLoom/`。最终地址以 GitHub 部署结果为准。
+
+首次启用：
+
+1. 打开本仓库的 [Settings → Pages](https://github.com/dujian0068/AgentLoom/settings/pages)。
+2. 在 **Build and deployment → Source** 选择 **GitHub Actions**。
+3. 向 `master` 推送提交，或到 [Actions](https://github.com/dujian0068/AgentLoom/actions/workflows/docs-pages.yml) 选择 **Deploy documentation to GitHub Pages → Run workflow → master**。
+4. 等待 Build 和 Deploy 都成功，再通过部署结果中的链接打开网站。初次部署前入口可能返回 404。
+
+工作流位于 [docs-pages.yml](../.github/workflows/docs-pages.yml)。每次更新 `master` 自动执行 `npm ci`、以 `/AgentLoom/` 为路径构建、校验站内链接并发布；也支持手动重跑。仅上传 `docs/.vitepress/dist`，不启动业务后端、不读取本地 `.env` 或连接数据库。
+
+构建任务只有仓库读取权限；部署任务使用 GitHub 内置 `GITHUB_TOKEN` 的 Pages 写入权限和 OIDC，不需要添加个人 Token 或服务器密码。部署使用 `github-pages` 环境，并串行执行，避免覆盖正在发布的版本。无需创建 `gh-pages` 分支，也无需改动个人博客仓库。
+
+发布失败时先查看 Actions 中失败的步骤：构建或链接校验失败须修正文档；Pages 未启用时先完成第 2 步再重跑；若仓库有环境审批规则，需要按已有规则批准部署。要发布旧版内容，应将文档变更恢复到 `master` 后重新部署。
 
 ## 依赖与校验
 
@@ -53,4 +70,4 @@ AGENTLOOM_DOCS_BASE=/AgentLoom/ npm run docs:preview
 - Mermaid 代码块在浏览器渲染为 SVG；原有 SVG 架构图继续直接嵌入。
 - VitePress 的生产构建会检查页面链接，不要用忽略所有死链的选项掩盖错误。
 
-框架参考：[VitePress](https://vitepress.dev/guide/getting-started)、[本地搜索](https://vitepress.dev/reference/default-theme-search)、[Mermaid](https://mermaid.js.org/config/usage.html)。
+框架参考：[VitePress](https://vitepress.dev/guide/getting-started)、[本地搜索](https://vitepress.dev/reference/default-theme-search)、[Mermaid](https://mermaid.js.org/config/usage.html)、[GitHub Pages 工作流](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages)。

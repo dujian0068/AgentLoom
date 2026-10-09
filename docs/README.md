@@ -1,6 +1,6 @@
 # AgentLoom 文档
 
-推荐使用带目录和搜索的网页阅读：在项目根执行 `npm ci`、`npm run docs:dev`，打开 http://127.0.0.1:8767 。[站内首页](index.md) · [阅读指南](reading-guide.md) · [维护与部署](documentation-site.md)。
+推荐使用带目录和搜索的[在线文档站](https://dujian0068.github.io/AgentLoom/)。本地阅读：在项目根执行 `npm ci`、`npm run docs:dev`，打开 http://127.0.0.1:8767 。[站内首页](index.md) · [阅读指南](reading-guide.md) · [维护与部署](documentation-site.md)。
 
 更新：2026-10-09；当前实现以 `master` 的 `9941e31` 为核对基线。建议从总体技术设计进入，再按 Runtime、平台接口或部署方向阅读。
 
